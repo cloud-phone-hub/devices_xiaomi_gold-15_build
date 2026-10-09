@@ -73,8 +73,19 @@
   "vendor": {
     "build-prop-sets": [],
     "build-prop-unsets": [],
-    "selinux-labels": {},
-    "note": "vendor/patch 注入文件的 security.selinux 标签（自官方 gold images dump）。键 = 注入树内相对路径；注入时按此回填，标签缺失即报错退出。本版本尚未 dump（vendor 阶段暂未移植），待补。"
+    "selinux-labels": {
+      "bin/logcat-dump": "u:object_r:system_file:s0",
+      "bin/netmgr_setup": "u:object_r:pioneer_exec:s0",
+      "bin/setup_display.sh": "u:object_r:system_file:s0",
+      "etc/init/cph_daemon.rc": "u:object_r:system_file:s0",
+      "etc/init/cph_disable_provision.rc": "u:object_r:vendor_file:s0",
+      "etc/init/cph_logcat_dump.rc": "u:object_r:vendor_file:s0",
+      "etc/init/cph_start_adbd.rc": "u:object_r:vendor_file:s0",
+      "etc/init/netmgr.rc": "u:object_r:vendor_file:s0",
+      "etc/permissions/android.hardware.telephony.xml": "u:object_r:vendor_configs_file:s0",
+      "etc/permissions/privapp-permissions-miuihome.xml": "u:object_r:vendor_configs_file:s0"
+    },
+    "note": "build/vendor/patch 注入文件的 security.selinux 标签，键 = 注入树内相对路径；vendor 阶段按此回填，标签缺失即报错退出。除 bin/netmgr_setup（CDH 可执行脚本，pioneer_exec）外均为 CDH 新增的配置/脚本件（CDH 自定义域，无官方对应件），沿用同项目同键的既定标签值。注：etc/fstab.mt6833 与 etc/init/hw/* 不注入——官方 vendor 内已有（见 vendor 基座=官方 vendor 的设计）。"
   },
 
   "vendor-dlkm": {

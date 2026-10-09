@@ -15,8 +15,9 @@ vendor_boot.img 由 build-vendor-boot.py 处理（删其 ramdisk fragment 内的
     preloader->lk 引导链的官方 boot 不适用于 QEMU/EDK II 云机。
   - fstab 注入布局对齐 cloud-droid-hub cmd/gsifix boot_firststage_fstab.go：
     各 fstab 名同时落到根/system/etc/first_stage_ramdisk/first_stage_ramdisk/system/etc 四处。
-  - fstab 名 = fstab.mt6833（云机 ro.hardware 已对齐真机 mt6833），内容取自 vendor
-    patch 树那份（/vendor/etc/fstab.mt6833 同源）。
+  - fstab 名 = fstab.mt6833（ro.hardware 对齐真机 mt6833），内容取自**官方 vendor 镜像**内
+    的 /etc/fstab.mt6833（dump.erofs 提取）——与真机一致：ramdisk 里那份就是 /vendor 那份
+    的副本。云机侧的挂载适配（vdc/vdb/mi_ext）不在本文件职责内。
 
 用法（可在任何目录）：
   python3 build/scripts/build-boot.py --kernel-image <Image>  # 打包 boot.img（默认 out/kernel/Image）
@@ -32,7 +33,7 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from buildenv import (  # noqa: E402
-    KERNEL_OUT, LINEAGE_OUT_DIR, ROM_DIST,
+    KERNEL_OUT, LINEAGE_OUT_DIR, ROM_DIST, ROM_ROOT_DIR,
 )
 from buildenv import env  # noqa: E402
 
@@ -61,10 +62,9 @@ BOOT_PAGE_SIZE = 4096
 
 MAX_BOOT_PARTITION_BYTES = 256 * 1024 * 1024
 
-# —— first_stage fstab 注入（对齐基线，让 EDK II 直启后的 init 首阶段能挂载
-#   /system(logical/super)/data(vdb)/metadata/mi_ext 等）。名字 = fstab.mt6833，
-#   与 init 按 ro.hardware(=mt6833，见 build-vendor-boot.py) 拼出的路径一致；内容取自
-#   vendor patch 树那份 /vendor/etc/fstab.mt6833（单一来源）。
+# —— first_stage fstab 注入（让 EDK II 直启后的 init 首阶段能挂载各分区）。名字 =
+#   fstab.mt6833，与 init 按 ro.hardware(=mt6833，见 build-vendor-boot.py) 拼出的路径一致；
+#   内容取自官方 vendor 镜像内的 /etc/fstab.mt6833（单一来源）。
 #   注入布局与 cloud-droid-hub cmd/gsifix boot_firststage_fstab.go 完全一致：
 #   各 fstab 名同时落到根/system/etc/first_stage_ramdisk/first_stage_ramdisk/system/etc 四处。
 _FSTAB_NAMES = (
@@ -84,17 +84,37 @@ _FSTAB_DIR_PATHS = (
     "system/etc",
 )
 
-# first stage fstab 内容来源：与 /vendor/etc/fstab.mt6833 同一份文件（vendor patch 树，
-# 同时由 inject.py 注入 vendor 分区供二阶段 mount_all 读取），单一来源避免两处漂移。
-# 真机同此——其 boot ramdisk 里的 fstab.mt6833 就是 /vendor 分区那份的完整副本。
-_FSTAB_SRC = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "vendor", "patch", "etc", "fstab.mt6833")
+# first stage fstab 内容来源：官方（厂商）vendor 镜像内的 /etc/fstab.mt6833。
+# 与真机一致——真机 boot ramdisk 里的 fstab.mt6833 就是 /vendor 分区那份的完整副本。
+# gold-15 的 vendor 基座即官方 vendor（见 build/vendor/build/vendor_builder.py），
+# 故直接自官方镜像取，不再由 vendor patch 树携带。
+VENDOR_OFFICIAL_IMG = os.path.join(ROM_ROOT_DIR, "vendor_a.img")
+_FSTAB_IN_VENDOR = "/etc/fstab.mt6833"
+
+
+def _erofs_tool():
+    """定位 dump.erofs；EROFSPROGS_DUMP > brew > PATH，缺失即报错。"""
+    for cand in (os.environ.get("EROFSPROGS_DUMP"),
+                 "/opt/homebrew/bin/dump.erofs", shutil.which("dump.erofs")):
+        if cand and os.path.isfile(cand):
+            return cand
+    print("[err] 缺少 dump.erofs（brew install erofs-utils）")
+    sys.exit(1)
 
 
 def firststage_fstab():
-    with open(_FSTAB_SRC, "rb") as f:
-        return f.read()
+    """取官方 vendor 镜像内 /etc/fstab.mt6833 的字节。"""
+    if not os.path.isfile(VENDOR_OFFICIAL_IMG):
+        print(f"[err] 官方 vendor 缺失: {VENDOR_OFFICIAL_IMG}（先 unpack）")
+        sys.exit(1)
+    res = subprocess.run([_erofs_tool(), f"--path={_FSTAB_IN_VENDOR}", "--cat",
+                          VENDOR_OFFICIAL_IMG],
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if res.returncode != 0 or not res.stdout:
+        print("[err] 官方 vendor 缺少 %s: %s"
+              % (_FSTAB_IN_VENDOR, res.stderr.decode("utf8", "replace")))
+        sys.exit(1)
+    return res.stdout
 
 
 def _file_ok(p):
@@ -243,7 +263,7 @@ def _read_newc_entries(data):
 def _patch_firststage_fstab_cpio(archive):
     """把 mt6833 fstab 注入 newc ramdisk，替换缺失/已有项，返回新 cpio。
 
-    内容取自 _FSTAB_SRC（vendor patch 树那份），与二阶段 /vendor/etc/fstab.mt6833 同源。
+    内容取自官方 vendor 镜像内的 /etc/fstab.mt6833（见 firststage_fstab）。
     """
     source_for = lambda name: firststage_fstab()
 
