@@ -1,0 +1,84 @@
+{
+  "schema": 1,
+  "build-id": "gold_global_images_OS3.0.5.0.VNQMIXM_20260811.0000.00_15.0_global_92861aa8b1",
+  "comment": "gold-15 (Redmi Note 13 5G / MTK MT6833) OS3.0.5.0.VNQMIXM（全局版）基线件清单。官方 gold images 分区为 EROFS（仅作参照/原位置换基座）；build-vendor / build-vendor_dlkm 实际以 lineage 底包的 ext4 vendor_a/vendor_dlkm_a 为基座。换 ROM = 新增一份同名 JSON。",
+
+  "version-description": {
+    "device-codename": "gold",
+    "device-name": "Redmi Note 13 5G",
+    "board": "mt6833",
+    "android-version": "15.0.0",
+    "os-version": "OS3.0.5.0.VNQMIXM",
+    "factory-tgz": "gold_global_images_OS3.0.5.0.VNQMIXM_20260811.0000.00_15.0_global_92861aa8b1.tgz",
+    "factory-dir": "gold_global_images_OS3.0.5.0.VNQMIXM_15.0",
+    "factory-kernel-banner": "6.6.118-android15-8-ge56cf6b09cca-ab15511674-4k #1 SMP PREEMPT Thu May 28 07:48:46 UTC 2026",
+    "lineage-dir": "lineage-22.0",
+    "measured-from": "roms/<factory-tgz>::images/boot.img（v4 头，内核段 gzip；解压后 strings 取 'Linux version ...'）"
+  },
+
+  "rom": {
+    "kernel": {
+      "uname-version": "Linux localhost 6.6.118-android15-8-ge56cf6b09cca-ab15511674-4k #1 SMP PREEMPT Thu May 28 07:48:46 UTC 2026 aarch64 Toybox",
+      "measured-from": "roms/<factory-dir>/images/boot.img（v4 头，内核段 gzip；解压后 strings 取 'Linux version ...'）。release/version 两个 token 为实测；sysname/nodename/machine/domainname 为固定格式。真机未核对。"
+    },
+    "images": {
+      "mi_ext_a.img": {
+        "size": 888860672,
+        "sha256": "40835c15034f6158eecdcd08898f152923ae54fd7bdc27578d20084f378e222a"
+      },
+      "odm_dlkm_a.img": {
+        "size": 348160,
+        "sha256": "2119a393d7bb021034839ff794d72c53bdfc69609ecab777f3ecf1e76ae53f7c"
+      },
+      "product_a.img": {
+        "size": 3288588288,
+        "sha256": "9bfdc26f1c13fc0c7a8e2f3b15ce4b614c8a89bf2ba3b68c61aa057fca99ddb0"
+      },
+      "super.img": {
+        "size": 9126805504,
+        "sha256": "9a008a979af92df03cf2640c412bd04445d5e59d4625ed692d7ac3381e3d2ba0"
+      },
+      "system_a.img": {
+        "size": 917180416,
+        "sha256": "facffea3cd7157d9fb1dc0f2fb74dfd34d7f26d358be41e9777a9927410b0463"
+      },
+      "system_dlkm_a.img": {
+        "size": 7323648,
+        "sha256": "bfec601a7dcff06aa4802043cb04e19288be068de9442900cb13f0dc982593ab"
+      },
+      "system_ext_a.img": {
+        "size": 989097984,
+        "sha256": "1b01c17e3771fee04f6ded8830beeecfc4a915872763399f69c00c757711b4b9"
+      },
+      "vendor_a.img": {
+        "size": 1372213248,
+        "sha256": "9110c8fcb33803e61008ed3e73bb8a58bdf040154b5ecf115ae4f29e447ec47f"
+      },
+      "vendor_dlkm_a.img": {
+        "size": 13983744,
+        "sha256": "6da6a3e7a4dea6e1cacc3b23e813fedd6cd8bf3713a99e7805abaf7bc24b4db4"
+      }
+    },
+    "vendor-fstype": "erofs",
+    "note": "官方 gold_images 目录平铺分区镜像（super 自动解包，2026-10-09 实测；super.img 已 simg2img 展开为 raw）。全部为 EROFS；pack_super 以 super.img 为基座仅原位覆盖 vendor/vendor_dlkm 数据区。"
+  },
+
+  "lineage": {
+    "base-dir": "/Volumes/work/cloud-phone-hub/lineage-rom/lineage-22.0/super",
+    "images": null,
+    "fstype": "ext4",
+    "note": "build-vendor / build-vendor_dlkm 的基座（virtio 内核匹配，debugfs 可解析）。images 待 unpack 后代入。"
+  },
+
+  "vendor": {
+    "build-prop-sets": [],
+    "build-prop-unsets": [],
+    "selinux-labels": {},
+    "note": "vendor/patch 注入文件的 security.selinux 标签（自官方 gold images dump）。键 = 注入树内相对路径；注入时按此回填，标签缺失即报错退出。本版本尚未 dump（vendor 阶段暂未移植），待补。"
+  },
+
+  "vendor-dlkm": {
+    "baseline-build-prop": null,
+    "note": "build-vendor_dlkm props 基线：官方 vendor_dlkm_a.img（EROFS）内 /etc/build.prop 提取件（Redmi/gold 真实设备身份），覆盖 lineage 基座渲染的 VirtIO 版本。待 unpack 后 dump（缺此项时 build-vendor_dlkm 会明确报错退出，不静默降级）。"
+  }
+}
