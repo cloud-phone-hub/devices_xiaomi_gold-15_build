@@ -1,0 +1,89 @@
+# log-fail —— gold-15 执行编译的阻塞现场（2026-10-09 实测）
+
+设备根：`/Volumes/work/cloud-phone-hub/devices/xiaomi/gold-15`
+执行方式：无 `main.py`，按流程顺序直接调各阶段脚本。
+
+---
+
+## A. boot 阶段：first_stage fstab 源缺失（实测报错，已修）
+
+```
+$ python3 build/scripts/build-boot.py
+Traceback (most recent call last):
+  File ".../build/scripts/build-boot.py", line 419, in <module>
+    sys.exit(main())
+  File ".../build/scripts/build-boot.py", line 414, in main
+    build_boot(kernel)
+  File ".../build/scripts/build-boot.py", line 392, in build_boot
+    ramdisk, _fstab_added = _inject_firststage_fstab_lz4(ramdisk)
+  File ".../build/scripts/build-boot.py", line 351, in _inject_firststage_fstab_lz4
+    patched, added = _patch_firststage_fstab_cpio(archive)
+  File ".../build/scripts/build-boot.py", line 252, in _patch_firststage_fstab_cpio
+    data = source_for(name)
+  File ".../build/scripts/build-boot.py", line 248, in <lambda>
+    source_for = lambda name: firststage_fstab()
+  File ".../build/scripts/build-boot.py", line 96, in firststage_fstab
+    with open(_FSTAB_SRC, "rb") as f:
+FileNotFoundError: [Errno 2] No such file or directory:
+  '.../devices/xiaomi/gold-15/build/vendor/patch/etc/fstab.mt6833'
+```
+
+原因：`build-boot.py` 的 `_FSTAB_SRC` 指向 vendor patch 树（该文件同时是二阶段
+`/vendor/etc/fstab.mt6833` 的单一来源），gold-15 未搬入。
+
+修复：自 note13 拷入 `build/vendor/patch/`（16 文件）。修复后同一命令通过（见 log-pass §2）。
+
+---
+
+## B. super 阶段：待替换镜像缺失（实测报错，未修——依赖未移植的 vendor 阶段）
+
+```
+$ python3 build/scripts/build-super.py --dry-run
+[err] 待替换镜像缺失 vendor: .../out/dist/rom/vendor.img（先 build-vendor / build-vendor_dlkm）
+exit=1
+```
+
+原因：`vendor` 阶段未移植（`build-vendor.py` + `build/vendor/{build,source}`）。
+
+---
+
+## C. pack 阶段：依赖缺失（实测检查，未修——同上）
+
+```
+=== pack 阶段依赖检查 ===
+MISS out/dist/rom/super.img
+OK   out/dist/rom/boot.img
+OK   out/dist/rom/vendor_boot.img
+MISS out/dist/rom/patch.img
+MISS out/dist/rom/vendor.img
+OK   out/dist/rom/vendor_dlkm.img
+```
+
+`pack-roms.py` 对 `super.img` 报 `[err] 缺少 super.img: …（先 pack_super）`；`patch.img` 缺失只 warn
+（vdc 不挂 `/mnt`）。
+
+---
+
+## D. 预设阻塞（未触发即消除，记录备查）
+
+`build/vendor_dlkm/build/props.py` 的守卫：
+
+```
+$ sed -n '39,46p' build/vendor_dlkm/build/props.py
+def _baseline_build_prop():
+    e = (load_baselines() or {}).get("vendor-dlkm", {}).get("baseline-build-prop")
+    if not e:
+        print("[err] 基线清单缺少 vendor-dlkm.baseline-build-prop"
+              "（build/baselines/<build-id>.json）")
+        sys.exit(1)
+```
+
+即 baselines 中该键若为 `null`（本次编译前的状态），`vendor_dlkm` 阶段**明确报错退出、不静默降级**。
+本次在跑 vendor_dlkm 之前先按实测回填，故未真正触发该报错。
+
+---
+
+## E. 未跑到的阶段
+
+`vendor → super → pack` 三段因 B/C 未能执行；`pack` 的 `--patch`/`--list-partitions` 等
+vda 增量能力未做验证。

@@ -78,7 +78,12 @@
   },
 
   "vendor-dlkm": {
-    "baseline-build-prop": null,
-    "note": "build-vendor_dlkm props 基线：官方 vendor_dlkm_a.img（EROFS）内 /etc/build.prop 提取件（Redmi/gold 真实设备身份），覆盖 lineage 基座渲染的 VirtIO 版本。待 unpack 后 dump（缺此项时 build-vendor_dlkm 会明确报错退出，不静默降级）。"
+    "baseline-build-prop": {
+      "path": "/etc/build.prop",
+      "length": 865,
+      "sha256": "0ee4e98c092a83f77c9e144544c5cd298ebdf7e17c2ba23b4468b8ec2b5a49df",
+      "label": "u:object_r:vendor_configs_file:s0"
+    },
+    "note": "build-vendor_dlkm props 基线：官方 vendor_dlkm_a.img（EROFS）内 /etc/build.prop 提取件（Redmi/gold 真实设备身份），覆盖 lineage 基座渲染的 VirtIO 版本。2026-10-09 实测：dump.erofs --cat 与 fsck.erofs --extract 两条路径取出的字节完全一致（len 865）。label 沿用 vendor_configs_file 域（同 pixel6-15 / note13）。"
   }
 }
