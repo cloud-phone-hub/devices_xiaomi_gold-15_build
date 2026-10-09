@@ -13,13 +13,17 @@
 | kernel | `scripts/build-kernel.py` → `kernel/build/build-kernel.sh` | ✅ | `out/kernel/Image`（`6.6.127-4k-cdh`）+ `out/dist/kernel/modules/*.ko`（11） |
 | boot | `scripts/build-boot.py` | ✅ | `out/dist/rom/boot.img` |
 | vendor_boot | `scripts/build-vendor-boot.py` | ✅ | `out/dist/rom/vendor_boot.img` |
-| vendor | `scripts/build-vendor.py`（**未移植**） | ⛔ | `out/dist/rom/vendor.img` |
+| vendor | `scripts/build-vendor.py` | 🟡 **仅 keymint 已移植** | `out/dist/rom/vendor.img` |
 | vendor_dlkm | `scripts/build-vendor_dlkm.py` | ✅ | `out/dist/rom/vendor_dlkm.img` |
-| super | `scripts/build-super.py`（官方 super 基底 + 原位替换 vendor/vendor_dlkm） | ⛔ 依赖 vendor | `out/dist/rom/super.img` |
-| pack | `scripts/pack-roms.py` | ⛔ 依赖 super | `out/device/gold-15/15/os3.0.5.0.vnqmixm/{vda.img,data.qcow2}` |
+| super | `scripts/build-super-lpmake.py`（官方 super 基底 + 原位替换 vendor/vendor_dlkm） | ✅ | `out/dist/rom/super.img` |
+| pack | `scripts/pack-roms.py` | ✅ | `out/device/gold-15/15/os3.0.5.0.vnqmixm/{vda.img,data.qcow2}` |
 
 未移植：`build/main.py`、`build/vendor.py`(=`build-vendor.py`)、`build/vendor/build/**`（12 个驱动模块）、
 `build/vendor/source/**`（17 个 HAL 子项目，1499 文件）、`build-patch.py`、`build_odm.py`、`build/odm/`。
+
+> ⚠️ `build/vendor/source/**` 目前**只移植了 `android.hardware.keymint`**；
+> `build/vendor/build/sepolicy.py` 目前**只移植了 keymint 段**（note13 该文件含约 20 段，
+> 含 `pioneer`、audio/radio/wifi/camera 等）。详见 `issue-gold15-keymint-port` 的「遗留」。
 
 前置配置：`build/manifest.json`（schema 2）、`build/baselines/<build-id>.json`（`rom` 段与
 `vendor-dlkm.baseline-build-prop` 已实测回填）、`kernel/{build,modules,source}`（source 走 `gold-15` 分支）。
@@ -28,6 +32,7 @@
 
 | issue | 主题 | 结论 |
 |---|---|---|
-| [issue-gold15-kernel-pipeline](evidence/issue-gold15-kernel-pipeline/solution.md) | 内核构建流水线接入（四段跑通） | kernel/boot/vendor_boot/vendor_dlkm 通过；vendor/super/pack 阻塞于未移植的 vendor 阶段 |
+| [issue-gold15-kernel-pipeline](evidence/issue-gold15-kernel-pipeline/solution.md) | 内核构建流水线接入（四段跑通） | kernel/boot/vendor_boot/vendor_dlkm 通过 |
+| [issue-gold15-keymint-port](evidence/issue-gold15-keymint-port/solution.md) | 移植 Remote KeyMint（原地替换官方 mitee 三件套） | **keymint 端到端可用**（4 实例注册 + keystore2 建钥 + `/data` 元数据加密挂载成功）；引导仍未到 `sys.boot_completed`（已定位：32 位件 ENOEXEC / `/vendor/bin/daemon` 缺失 / `pioneer` 域未移植） |
 
-同目录 `log-fail.txt`（阻塞现场）/ `log-pass.txt`（四段产物与关键日志）为配套原始记录。
+各自目录内 `log-fail.txt`（阻塞现场）/ `log-pass.txt`（通过现场）为配套原始记录。

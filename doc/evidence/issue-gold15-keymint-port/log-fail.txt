@@ -1,0 +1,39 @@
+### 来源：out/core/daemon/runtime/gold-15/13/qemu.log
+### 主题：引导未完成的失败现场（32 位 ENOEXEC → zygote 崩溃循环；/vendor/bin/daemon 缺失；pioneer 域缺失）
+
+--- 32 位可执行件 ENOEXEC（去重计数）
+ 138 cannot execv('/vendor/bin/aee_aedv'
+ 138 cannot execv('/system_ext/bin/aee_aed'
+ 138 cannot execv('/system/bin/drmserver32'
+ 138 cannot execv('/system/bin/app_process32'
+ 137 cannot execv('/vendor/bin/v3avpud'
+ 137 cannot execv('/vendor/bin/hw/android.hardware.media.omx@1.0-service'
+ 137 cannot execv('/vendor/bin/hw/android.hardware.media.c2-mediatek'
+ 137 cannot execv('/vendor/bin/hw/android.hardware.cas@1.2-service'
+ 137 cannot execv('/vendor/bin/fuelgauged'
+
+--- zygote_secondary 退出 127 / 主 zygote 被 SIGKILL
+2761:[   27.439708][    T1] init: Service 'zygote_secondary' (pid 507) exited with status 127
+2766:[   27.449713][    T1] init: Service 'zygote' (pid 506) received signal 9 from uid 0 pid 506
+3509:[   28.614096][    T1] init: Service 'zygote_secondary' (pid 739) exited with status 127
+3518:[   28.621479][    T1] init: Service 'zygote' (pid 759) received signal 9 from uid 0 pid 759
+3924:[   33.304762][    T1] init: Service 'zygote_secondary' (pid 1145) exited with status 127
+4271:[   38.023464][    T1] init: Service 'zygote' (pid 1152) received signal 9 from uid 0 pid 1152
+4381:[   38.310468][    T1] init: Service 'zygote_secondary' (pid 1506) exited with status 127
+4703:[   42.998937][    T1] init: Service 'zygote' (pid 1512) received signal 9 from uid 0 pid 1512
+
+--- zygote 重启次数
+138
+
+--- CDH daemon 缺失
+2547:[   27.145004][    T1] init: Could not start service 'daemon': Cannot find '/vendor/bin/daemon': No such file or directory
+
+--- pioneer 域缺失（setexeccon EINVAL / ctx invalid）
+510:[    0.731412][    T1] SELinux: cdh: no pioneer type in policy, not marking permissive
+1624:[   11.575868][    T1] SELinux:  Context u:object_r:pioneer_exec:s0 is not valid (left unmapped).
+1627:[   11.579244][  T257] init: cannot setexeccon('u:r:pioneer:s0') for vendor.netmgr_setup: Invalid argument
+1657:[   11.602658][  T281] init: cannot setexeccon('u:r:pioneer:s0') for vendor.netmgr_configure: Invalid argument
+1668:[   11.608707][  T285] init: cannot setexeccon('u:r:pioneer:s0') for vendor.netmgr_fingerprint: Invalid argument
+2551:[   27.147322][  T485] init: cannot setexeccon('u:r:pioneer:s0') for exec 17 (/system/bin/sh -c 'getprop ro.zygote > /dev/console'): Invalid argument
+3446:[   28.512591][  T849] init: cannot setexeccon('u:r:pioneer:s0') for auto_provision: Invalid argument
+3450:[   28.515381][  T851] init: cannot setexeccon('u:r:pioneer:s0') for keep_awake: Invalid argument

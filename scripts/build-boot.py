@@ -16,8 +16,9 @@ vendor_boot.img 由 build-vendor-boot.py 处理（删其 ramdisk fragment 内的
   - fstab 注入布局对齐 cloud-droid-hub cmd/gsifix boot_firststage_fstab.go：
     各 fstab 名同时落到根/system/etc/first_stage_ramdisk/first_stage_ramdisk/system/etc 四处。
   - fstab 名 = fstab.mt6833（ro.hardware 对齐真机 mt6833），内容取自**官方 vendor 镜像**内
-    的 /etc/fstab.mt6833（dump.erofs 提取）——与真机一致：ramdisk 里那份就是 /vendor 那份
-    的副本。云机侧的挂载适配（vdc/vdb/mi_ext）不在本文件职责内。
+    的 /etc/fstab.mt6833（dump.erofs 提取）后再做**云机适配**：剥 avb/avb_keys、剔除非云机
+    分区的 by-name 行、/data 改 vdb、persist 改 vfat（详见 _adapt_fstab_for_cloud，每条都
+    对应起机实测证据）。
 
 用法（可在任何目录）：
   python3 build/scripts/build-boot.py --kernel-image <Image>  # 打包 boot.img（默认 out/kernel/Image）
@@ -36,6 +37,7 @@ from buildenv import (  # noqa: E402
     KERNEL_OUT, LINEAGE_OUT_DIR, ROM_DIST, ROM_ROOT_DIR,
 )
 from buildenv import env  # noqa: E402
+import fstab_cloud  # noqa: E402  # 派生规则与本目录同处，vendor 构建反向引用同一份
 
 # 设备根（本文件位于 build/scripts/ 下，向上 3 级即设备根）
 _DEVICE_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -103,7 +105,10 @@ def _erofs_tool():
 
 
 def firststage_fstab():
-    """取官方 vendor 镜像内 /etc/fstab.mt6833 的字节。"""
+    """取官方 vendor 镜像内 /etc/fstab.mt6833 的字节，做云机派生后返回。
+
+    派生规则单一来源 = build/vendor/build/fstab_cloud.py（与 vendor 二阶段那份同口径）。
+    """
     if not os.path.isfile(VENDOR_OFFICIAL_IMG):
         print(f"[err] 官方 vendor 缺失: {VENDOR_OFFICIAL_IMG}（先 unpack）")
         sys.exit(1)
@@ -114,7 +119,83 @@ def firststage_fstab():
         print("[err] 官方 vendor 缺少 %s: %s"
               % (_FSTAB_IN_VENDOR, res.stderr.decode("utf8", "replace")))
         sys.exit(1)
-    return res.stdout
+    data, dropped, rewrote = fstab_cloud.adapt(
+        res.stdout, fstab_cloud.cloud_partitions(LINEAGE_DIR))
+    fstab_cloud.report(dropped, rewrote, where="（boot ramdisk 一阶段）")
+    return data
+
+
+# 云机 persist 行的权威写法：云机该盘是 vfat（GRUB grubenv 依赖），官方写 ext4 会被
+# fs_mgr check 后格式化；与 note13 云机版同款。
+_CLOUD_PERSIST_LINE = (
+    "/dev/block/by-name/persist /mnt/vendor/persist vfat "
+    "rw,sync,shortname=lower,uid=1000,gid=1000,dmask=007,fmask=117,"
+    "context=u:object_r:persist_file:s0 formattable"
+)
+
+
+def cloud_gpt_partitions():
+    """云机 GPT 内实际存在的分区名（= lineage 底包解包导出的 <名>.img）。"""
+    if not os.path.isdir(LINEAGE_DIR):
+        print(f"[err] lineage 目录缺失: {LINEAGE_DIR}")
+        sys.exit(1)
+    names = {f[:-4] for f in os.listdir(LINEAGE_DIR) if f.endswith(".img")}
+    if not names:
+        print(f"[err] {LINEAGE_DIR} 内无分区镜像，无法判定云机分区")
+        sys.exit(1)
+    return names
+
+
+def _adapt_fstab_for_cloud(raw):
+    """把官方 MTK fstab 派生为云机版（每一条都对应实测证据）。
+
+    1) 剥掉挂载选项里的 avb / avb=… / avb_keys=…：云机无 vbmeta* 分区、不开 AVB；
+       留着 init 的 BlockDevInitializer 会等 vbmeta uevent 直到 10s 超时 abort 重启
+       （实测：partition(s) not found in /sys ... vbmeta_a/vbmeta_system_a/vbmeta_vendor_a
+        → InitFatalReboot signal 6 → reboot 循环）。
+    2) 丢弃 device 为 /dev/block/by-name/<名> 而该分区不在云机 GPT 的行（MTK 物理分区
+       rescue/protect1/protect2/nvdata/nvcfg/lk/tee/scp/…/vbmeta*）；其中带 wait 的
+       条目属"必需挂载"，二阶段必然失败。
+    3) /data：云机在独立 virtio 盘，by-name/userdata -> /dev/block/vdb。
+    4) persist：云机该盘是 vfat（见 _CLOUD_PERSIST_LINE）。
+    """
+    existing = cloud_gpt_partitions()
+    kept, dropped, rewrote = [], [], []
+    for line in raw.decode("utf-8", "replace").splitlines():
+        s = line.strip()
+        if not s or s.startswith("#"):
+            kept.append(line)
+            continue
+        f = s.split()
+        if len(f) < 5:
+            kept.append(line)
+            continue
+        dev, flags = f[0], f[4]
+        if dev.startswith("/dev/block/by-name/"):
+            name = dev[len("/dev/block/by-name/"):]
+            if name == "userdata":
+                f[0] = "/dev/block/vdb"
+                rewrote.append(f"{dev} -> /dev/block/vdb")
+            elif name == "persist":
+                kept.append(_CLOUD_PERSIST_LINE)
+                rewrote.append("persist: 官方 ext4 -> 云机 vfat")
+                continue
+            elif (name not in existing and f"{name}_a" not in existing
+                  and f"{name}_b" not in existing):
+                dropped.append(name)
+                continue
+        tokens = [t for t in flags.split(",")
+                  if t != "avb" and not t.startswith(("avb=", "avb_keys="))]
+        f[4] = ",".join(tokens)
+        kept.append(" ".join(f))
+
+    uniq = sorted(set(dropped))
+    print(f"[ok] first_stage fstab 云机适配：剔除非云机分区行 {len(dropped)} 行"
+          f"（{len(uniq)} 个分区：{'、'.join(uniq[:12])}"
+          f"{'…' if len(uniq) > 12 else ''}）")
+    for r in rewrote:
+        print(f"     改写 {r}")
+    return ("\n".join(kept) + "\n").encode()
 
 
 def _file_ok(p):

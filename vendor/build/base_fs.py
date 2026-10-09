@@ -33,6 +33,7 @@ C_SRC_DIR = "/mnt/src"      # erofs 挂载点
 C_DST_DIR = "/mnt/dst"      # ext4 挂载点
 C_WORK = "/work.img"        # ext4 镜像（放容器内，避免在 virtiofs 上 loop）
 C_OUT_DIR = "/out"
+C_WORKDIR = "/workdir"      # 宿主 TMP_DIR/vendor（注入脚本 / 标签 / props 改写脚本）
 
 PREPARE = """mkdir -p {src_dir} {dst_dir}
 mount -t erofs -o ro {src_img} {src_dir}

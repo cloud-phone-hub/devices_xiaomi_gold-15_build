@@ -1,0 +1,264 @@
+### 来源：out/core/daemon/runtime/gold-15/13/qemu.log
+### 主题：Remote KeyMint 注册 4 实例 + /data 元数据加密挂载（keymint 链路通过）
+
+[   11.568223][    T1] init: processing action (ro.build.ab_update=true && post-fs) from (/system_ext/etc/init/init.miui.ext.rc:67)
+[   11.568793][    T1] init: processing action (post-fs) from (/system_ext/etc/init/init.miui.ext.rc:149)
+[   11.569318][    T1] init: starting service 'stability_setup'...
+[   11.569764][    T1] init: failed write pid 253 to memcg
+[   11.570255][    T1] init: ... started service 'stability_setup' has pid 253
+[   11.570614][    T1] init: Could not start service 'mqsasd': Cannot find '/system_ext/xbin/mqsasd': No such file or directory
+[   11.571098][    T1] init: processing action (post-fs) from (/vendor/etc/init/android.hardware.security.keymint.mitee@3.0-service.rc:1)
+[   11.571589][  T128] CDH-GOLD-KEYMINT-RC-V3-POSTFS\n
+[   11.571678][  T128] init: wait for '/dev/hvc3' took 0ms
+[   11.572164][  T128] CDH-GOLD-KEYMINT-RC-V3-POSTFS-STARTING\n
+[   11.572615][    T1] init: starting service 'vendor.keymint-mitee'...
+[   11.573623][    T1] init: failed write pid 256 to memcg
+[   11.574417][    T1] init: ... started service 'vendor.keymint-mitee' has pid 256
+[   11.575190][    T1] init: processing action (post-fs) from (/vendor/etc/init/netmgr.rc:34)
+[   11.575868][    T1] SELinux:  Context u:object_r:pioneer_exec:s0 is not valid (left unmapped).
+[   11.576721][    T1] init: starting service 'vendor.netmgr_setup'...
+[   11.578652][    T1] init: failed write pid 257 to memcg
+[   11.579244][  T257] init: cannot setexeccon('u:r:pioneer:s0') for vendor.netmgr_setup: Invalid argument
+[   11.580290][    T1] init: ... started service 'vendor.netmgr_setup' has pid 257
+[   11.582230][    T1] init: SVC_EXEC service 'vendor.netmgr_setup' pid 257 (uid 0 gid 0+1 context u:r:pioneer:s0) started; waiting...
+[   11.583542][  T222] type=1400 audit(11.568:34): avc:  denied  { read } for  comm="hypsys_system" name="u:object_r:vendor_default_prop:s0" dev="tmpfs" ino=496 scontext=u:r:hypsys_ssi_default:s0 tcontext=u:object_r:vendor_default_prop:s0 tclass=file permissive=0
+[   11.583799][    T1] init: Service 'stability_setup' (pid 253) exited with status 0 oneshot service took 0.013000 seconds in background
+[   11.586252][  T256] android.hardware.security.keymint-service.remote: adding keymint service instance: android.hardware.security.keymint.IKeyMintDevice/default
+[   11.586662][  T256] cutils-trace: Error opening trace file: No such file or directory (2)
+[   11.586949][  T215] servicemanager: getDeviceHalManifest: Reading VINTF information.
+[   11.587272][  T256] android.hardware.security.keymint-service.remote: adding keymint service instance: android.hardware.security.secureclock.ISecureClock/default
+[   11.587465][  T222] type=1400 audit(11.568:35): avc:  denied  { read } for  comm="hypsys_system" name="u:object_r:vendor_default_prop:s0" dev="tmpfs" ino=496 scontext=u:r:hypsys_ssi_default:s0 tcontext=u:object_r:vendor_default_prop:s0 tclass=file permissive=0
+[   11.588309][  T215] servicemanager: Loaded APEX Infos from /bootstrap-apex/apex-info-list.xml
+[   11.588327][  T215] servicemanager: getDeviceHalManifest: Successfully processed VINTF information
+[   11.588330][  T215] servicemanager: getFrameworkHalManifest: Reading VINTF information.
+[   11.588528][  T215] servicemanager: Loaded APEX Infos from /bootstrap-apex/apex-info-list.xml
+[   11.588538][  T215] servicemanager: getFrameworkHalManifest: Successfully processed VINTF information
+[   11.588543][  T215] servicemanager: Caller(pid=252,uid=0,sid=u:r:hypsys_ssi_default:s0) Found xiaomi.system.hypsys.common.IHypSysSsi/default in framework VINTF manifest.
+[   11.589107][  T215] servicemanager: Caller(pid=252,uid=0,sid=u:r:hypsys_ssi_default:s0) Found xiaomi.system.hypsys.common.IHypSysSsiIntl/default in framework VINTF manifest.
+[   11.589136][  T215] SELinux: avc:  denied  { find } for pid=252 uid=0 name=vendor.xiaomi.hardware.misys.common.IMiSysImpl/default scontext=u:r:hypsys_ssi_default:s0 tcontext=u:object_r:default_android_service:s0 tclass=service_manager permissive=0
+[   11.589161][  T256] android.hardware.security.keymint-service.remote: adding keymint service instance: android.hardware.security.sharedsecret.ISharedSecret/default
+[   11.589207][  T256] android.hardware.security.keymint-service.remote: adding keymint service instance: android.hardware.security.keymint.IRemotelyProvisionedComponent/default
+[   11.591400][    T1] init: Sending signal 9 to service 'stability_setup' (pid 253) process group...
+[   11.591992][  T222] type=1400 audit(11.576:36): avc:  denied  { ptrace } for  comm="crash_dump64" scontext=u:r:crash_dump:s0 tcontext=u:r:init:s0 tclass=process permissive=0
+[   11.592206][    T1] libprocessgroup: Removed cgroup /sys/fs/cgroup/uid_0/pid_253
+[   11.599695][    T1] init: Service 'vendor.netmgr_setup' (pid 257) received signal 6 from uid 0 pid 257 waiting took 0.020000 seconds
+[   11.600014][    T1] init: Sending signal 9 to service 'vendor.netmgr_setup' (pid 257) process group...
+[   11.600327][    T1] libprocessgroup: Removed cgroup /sys/fs/cgroup/uid_0/pid_257
+[   11.601063][    T1] init: Untracked pid 280 exited with status 1
+[   11.601223][    T1] init: Untracked pid 280 did not have an associated service entry and will not be reaped
+[   11.601577][    T1] init: starting service 'vendor.netmgr_configure'...
+[   11.602177][    T1] init: failed write pid 281 to memcg
+[   11.602658][  T281] init: cannot setexeccon('u:r:pioneer:s0') for vendor.netmgr_configure: Invalid argument
+[   11.602997][    T1] init: ... started service 'vendor.netmgr_configure' has pid 281
+[   11.603464][    T1] init: SVC_EXEC service 'vendor.netmgr_configure' pid 281 (uid 0 gid 0+1 context u:r:pioneer:s0) started; waiting...
+[   11.605723][  T222] type=1400 audit(11.588:37): avc:  denied  { ptrace } for  comm="crash_dump64" scontext=u:r:crash_dump:s0 tcontext=u:r:init:s0 tclass=process permissive=0
+[   11.606000][    T1] init: Untracked pid 284 exited with status 1
+[   11.606458][    T1] init: Untracked pid 284 did not have an associated service entry and will not be reaped
+[   11.606797][    T1] init: Service 'vendor.netmgr_configure' (pid 281) received signal 6 from uid 0 pid 281 waiting took 0.004000 seconds
+[   11.607111][    T1] init: Sending signal 9 to service 'vendor.netmgr_configure' (pid 281) process group...
+[   11.607384][    T1] libprocessgroup: Removed cgroup /sys/fs/cgroup/uid_0/pid_281
+[   11.607856][    T1] init: starting service 'vendor.netmgr_fingerprint'...
+[   11.608265][    T1] init: failed write pid 285 to memcg
+[   11.608707][  T285] init: cannot setexeccon('u:r:pioneer:s0') for vendor.netmgr_fingerprint: Invalid argument
+[   11.609285][    T1] init: ... started service 'vendor.netmgr_fingerprint' has pid 285
+[   11.609754][    T1] init: SVC_EXEC service 'vendor.netmgr_fingerprint' pid 285 (uid 0 gid 0+1 context u:r:pioneer:s0) started; waiting...
+[   11.613420][  T222] type=1400 audit(11.596:38): avc:  denied  { ptrace } for  comm="crash_dump64" scontext=u:r:crash_dump:s0 tcontext=u:r:init:s0 tclass=process permissive=0
+[   11.613675][    T1] init: Untracked pid 288 exited with status 1
+[   11.614123][    T1] init: Untracked pid 288 did not have an associated service entry and will not be reaped
+[   11.614495][    T1] init: Service 'vendor.netmgr_fingerprint' (pid 285) received signal 6 from uid 0 pid 285 waiting took 0.006000 seconds
+[   11.614828][    T1] init: Sending signal 9 to service 'vendor.netmgr_fingerprint' (pid 285) process group...
+[   11.615132][    T1] libprocessgroup: Removed cgroup /sys/fs/cgroup/uid_0/pid_285
+[   11.615650][    T1] init: processing action (post-fs) from (/product/etc/init/init.miui.opconfig.rc:13)
+[   11.615914][    T1] init: Command 'chown system system /opconfig' action=post-fs (/product/etc/init/init.miui.opconfig.rc:15) took 0ms and failed: lchown() failed: Read-only file system
+[   11.616347][    T1] init: Command 'chmod 0775 /opconfig' action=post-fs (/product/etc/init/init.miui.opconfig.rc:16) took 0ms and failed: fchmodat() failed: Read-only file system
+[   11.617029][    T1] selinux: SELinux:  setxattr failed: /opconfig:  Read-only file system
+[   11.617368][    T1] init: Command 'mkdir /opconfig/lost+found 0770 root root' action=post-fs (/product/etc/init/init.miui.opconfig.rc:21) took 0ms and failed: mkdir() failed on /opconfig/lost+found: Read-only file system
+[   11.617888][    T1] init: processing action (post-fs) from (/product/etc/init/init.miui.opcust.rc:13)
+[   11.618139][    T1] init: Command 'chown system system /opcust' action=post-fs (/product/etc/init/init.miui.opcust.rc:15) took 0ms and failed: lchown() failed: Read-only file system
+[   11.618584][    T1] init: Command 'chmod 0775 /opcust' action=post-fs (/product/etc/init/init.miui.opcust.rc:16) took 0ms and failed: fchmodat() failed: Read-only file system
+[   11.619133][    T1] selinux: SELinux:  setxattr failed: /opcust:  Read-only file system
+[   11.619377][    T1] init: Command 'mkdir /opcust/lost+found 0770 root root' action=post-fs (/product/etc/init/init.miui.opcust.rc:21) took 0ms and failed: mkdir() failed on /opcust/lost+found: Read-only file system
+[   11.619910][    T1] init: processing action (late-fs) from (/system/etc/init/hw/init.rc:744)
+[   11.620193][    T1] init: starting service 'wmt_loader'...
+[   11.620707][    T1] init: failed write pid 289 to memcg
+[   11.621715][    T1] init: ... started service 'wmt_loader' has pid 289
+[   11.621957][    T1] init: starting service 'wmt_launcher'...
+[   11.622344][    T1] init: failed write pid 290 to memcg
+[   11.623521][    T1] init: ... started service 'wmt_launcher' has pid 290
+[   11.624396][    T1] init: starting service 'system_suspend'...
+[   11.624842][    T1] init: failed write pid 291 to memcg
+[   11.626120][    T1] init: ... started service 'system_suspend' has pid 291
+[   11.627155][    T1] init: starting service 'keystore2'...
+[   11.628868][    T1] init: failed write pid 292 to memcg
+[   11.630333][    T1] init: ... started service 'keystore2' has pid 292
+[   11.630614][    T1] init: starting service 'vendor.boot-default'...
+[   11.631178][    T1] init: failed write pid 295 to memcg
+[   11.631563][  T215] servicemanager: Caller(pid=291,uid=1000,sid=u:r:system_suspend:s0) Found android.system.suspend.ISystemSuspend/default in framework VINTF manifest.
+[   11.632491][    T1] init: ... started service 'vendor.boot-default' has pid 295
+[   11.633624][    T1] init: starting service 'exec 7 (/system/bin/fsverity_init --load-verified-keys)'...
+[   11.634601][    T1] init: failed write pid 297 to memcg
+[   11.635083][    T1] init: ... started service 'exec 7 (/system/bin/fsverity_init --load-verified-keys)' has pid 297
+[   11.635565][    T1] init: SVC_EXEC service 'exec 7 (/system/bin/fsverity_init --load-verified-keys)' pid 297 (uid 0 gid 0+0 context default) started; waiting...
+[   11.636916][    T1] init: Service 'exec 7 (/system/bin/fsverity_init --load-verified-keys)' (pid 297) exited with status 0 waiting took 0.001000 seconds
+[   11.637408][    T1] init: Sending signal 9 to service 'exec 7 (/system/bin/fsverity_init --load-verified-keys)' (pid 297) process group...
+[   11.637846][    T1] libprocessgroup: Removed cgroup /sys/fs/cgroup/uid_0/pid_297
+[   11.638152][    T1] init: processing action (late-fs) from (/system/etc/init/hw/init.rc:761)
+[   11.638643][    T1] init: processing action (ro.virtual_ab.enabled=true && late-fs) from (/system/etc/init/hw/init.rc:776)
+[   11.639130][    T1] init: processing action (late-fs) from (/vendor/etc/init/hw/init.mt6833.rc:154)
+[   11.639882][    T1] init: Command 'write /sys/kernel/tracing/trace_marker B|1|Mount late' action=late-fs (/vendor/etc/init/hw/init.mt6833.rc:158) took 0ms and failed: Unable to write to file '/sys/kernel/tracing/trace_marker': Unable to write file contents: Bad file descriptor
+[   11.641664][    T1] init: [libfstab] Warning: unknown flag: resize
+[   11.642105][    T1] init: Calling: /system/bin/vdc checkpoint needsCheckpoint
+[   11.645956][  T295] android.hardware.boot-service.mtk: [libfstab] Using Android DT directory /proc/device-tree/firmware/android/
+[   11.646687][  T295] android.hardware.boot-service.mtk: [libfstab] Warning: unknown flag: resize
+[   11.647592][  T298] vdc: vdc()++ checkpoint needsCheckpoint
+[   11.648486][  T215] servicemanager: Caller(pid=234,uid=0,sid=u:r:vold:s0) Could not find android.hardware.boot.IBootControl/default in the VINTF manifest. No alternative instances declared in VINTF.
+[   11.649578][  T234] vold: AIDL IBootControl not available, falling back to HIDL.
+[   11.650071][  T234] vold: Error getting bootctrl v1.0 module.
+[   11.650784][    T1] init: [libfs_mgr] Set readahead_kb: 512 on /sys/class/block/vdb/queue/read_ahead_kb
+[   11.650826][  T222] type=1400 audit(11.636:39): avc:  denied  { write } for  comm="init" name="read_ahead_kb" dev="sysfs" ino=11661 scontext=u:r:init:s0 tcontext=u:object_r:sysfs:s0 tclass=file permissive=0
+[   11.653307][    T1] init: [libfs_mgr] Running /system/bin/fsck.f2fs -a -c 10000 --debug-cache /dev/block/vdb
+[   11.657066][    T1] fsck.f2fs: Info: Automatic fix mode enabled.
+[   11.657553][    T1] fsck.f2fs: 	Error: Failed to check the device zoned model
+[   11.657558][  T222] type=1400 audit(11.644:40): avc:  denied  { read } for  comm="fsck.f2fs" name="zoned" dev="sysfs" ino=11683 scontext=u:r:fsck:s0 tcontext=u:object_r:sysfs:s0 tclass=file permissive=0
+[   11.657937][    T1] fsck.f2fs: fsck.f2fs terminated by exit(8)
+[   11.657937][    T1] 
+[   11.659212][    T1] init: [libfs_mgr] /system/bin/fsck.f2fs returned status 0x800
+[   11.659789][    T1] init: [libfs_mgr] do not resize!!!!
+[   11.659978][    T1] init: Mount point /dev/block/vdb @ /data uses metadata encryption, which means we need to unmount it later and call encryptFstab/encrypt_inplace. To avoid file operations before encryption, we will mount it as read-only first
+[   11.669423][    T1] F2FS-fs (vdb): Found nat_bits in checkpoint
+[   11.682677][  T215] servicemanager: Caller(pid=292,uid=1017,sid=u:r:keystore:s0) Found android.system.keystore2.IKeystoreService/default in framework VINTF manifest.
+[   11.699276][    T1] F2FS-fs (vdb): Mounted with checkpoint version = 5f6914d
+[   11.699567][    T1] init: [libfs_mgr] __mount(source=/dev/block/vdb,target=/data,type=f2fs)=0: Success
+[   11.700775][    T1] init: [libfs_mgr] umount_retry(): unmount(/data) succeeded
+[   11.700982][    T1] init: Calling: /system/bin/vdc cryptfs encryptFstab /dev/block/vdb /data false f2fs false 
+[   11.703657][  T307] vdc: vdc()++ cryptfs encryptFstab
+[   11.706030][  T234] vold: Creating new key in /metadata/vold/metadata_encryption/key
+[   11.713602][  T234] vold: keystore2 Keystore generateKey returned service specific error: -67
+[   11.713898][  T234] vold: Failed to generate rollback-resistant key.  This is expected if keystore doesn't support rollback resistance.  Falling back to non-rollback-resistant key.
+[   11.718887][  T234] vold: start backup
+[   11.719084][  T309] vold: src: /metadata/vold/metadata_encryption/key/encrypted_key dst: /metadata/vold/metadata_encryption/key_back/encrypted_key
+[   11.719666][  T309] vold: src: /metadata/vold/metadata_encryption/key/keymaster_key_blob dst: /metadata/vold/metadata_encryption/key_back/keymaster_key_blob
+[   11.720250][  T309] vold: src: /metadata/vold/metadata_encryption/key/secdiscardable dst: /metadata/vold/metadata_encryption/key_back/secdiscardable
+[   11.721456][  T309] vold: src: /metadata/vold/metadata_encryption/key/stretching dst: /metadata/vold/metadata_encryption/key_back/stretching
+[   11.722389][  T309] vold: src: /metadata/vold/metadata_encryption/key/version dst: /metadata/vold/metadata_encryption/key_back/version
+[   11.723763][  T234] vold: Encrypting f2fs filesystem on /dev/block/vdb in-place via /dev/block/mapper/userdata
+[   11.724038][  T234] vold: 119819 blocks (490 MB) of 28906005 blocks are in-use
+[   13.294956][  T234] vold: Successfully encrypted f2fs filesystem on /dev/block/vdb
+[   13.312254][  T234] vold: [libfs_mgr] Set readahead_kb: 512 on /sys/class/block/dm-48/queue/read_ahead_kb
+[   13.312785][  T234] vold: [libfs_mgr] Set readahead_kb: 512 on /sys/class/block/vdb/queue/read_ahead_kb
+[   13.314445][  T234] vold: [libfs_mgr] Running /system/bin/fsck.f2fs -a -c 10000 --debug-cache /dev/block/dm-48
+[   13.318701][  T234] fsck.f2fs: Info: Automatic fix mode enabled.
+[   13.319110][  T234] fsck.f2fs: Info: not exist /proc/version!
+[   13.319541][  T234] fsck.f2fs: Info: MKFS version
+[   13.319667][  T234] fsck.f2fs:   "Linux version 7.0.14-orbstack-00380-ga7e0a2dc9535 (orbstack@builder) (ClangBuiltLinux clang version 22.1.3 (https://github.com/llvm/llvm-project.git e9846648fd6183ee6d8cbdb4502213fcf902a211), ClangBuiltLinux LLD 22.1.3 (https://github.com/llvm/llvm-pro"
+[   13.320810][  T234] fsck.f2fs: Info: FSCK version
+[   13.320947][  T234] fsck.f2fs:   from "Linux version 7.0.14-orbstack-00380-ga7e0a2dc9535 (orbstack@builder) (ClangBuiltLinux clang version 22.1.3 (https://github.com/llvm/llvm-project.git e9846648fd6183ee6d8cbdb4502213fcf902a211), ClangBuiltLinux LLD 22.1.3 (https://github.com/llvm/llvm-pro"
+[   13.322022][  T234] fsck.f2fs:     to "6.6.89-android15-8-gbe8d201b0d27-ab13762941-4k"
+[   13.322383][  T234] fsck.f2fs: Info: superblock features = 499 :  encrypt extra_attr project_quota quota verity
+[   13.322649][  T234] fsck.f2fs: Info: superblock encrypt level = 0, salt = 00000000000000000000000000000000
+[   13.322899][  T234] fsck.f2fs: [update_superblock: 890] Info: Done to update superblock
+[   13.323122][  T234] fsck.f2fs: Info: Segments per section = 1
+[   13.323275][  T234] fsck.f2fs: Info: Sections per zone = 1
+[   13.323421][  T234] fsck.f2fs: Info: total FS sectors = 28906005 (112914 MB)
+[   13.323607][  T234] fsck.f2fs: Info: CKPT version = 5f6914d
+[   13.323754][  T234] fsck.f2fs: Info: version timestamp cur: 0, prev: 0
+[   13.323925][  T234] fsck.f2fs: [update_superblock: 890] Info: Done to update superblock
+[   13.324134][  T234] fsck.f2fs: Info: checkpoint state = 185 :  trimmed nat_bits compacted_summary unmount
+[   13.324387][  T234] fsck.f2fs: Info: No error was reported
+[   13.324562][  T234] fsck.f2fs: 
+[   13.324689][  T234] fsck.f2fs: c, u, RA, CH, CM, Repl=
+[   13.324829][  T234] fsck.f2fs: 10000 8 8 0 8 0
+[   13.325286][  T126] init: Unable to set property 'ro.boottime.init.fsck.data' from uid:0 gid:0 pid:234: Read-only property was already set
+[   13.339466][  T234] F2FS-fs (dm-48): Found nat_bits in checkpoint
+[   13.370662][  T234] F2FS-fs (dm-48): Mounted with checkpoint version = 5f6914d
+[   13.370946][  T234] vold: [libfs_mgr] __mount(source=/dev/block/mapper/userdata,target=/data,type=f2fs)=0: Success
+[   13.371400][  T126] init: Unable to set property 'ro.boottime.init.mount.data' from uid:0 gid:0 pid:234: Read-only property was already set
+[   13.372359][  T307] vdc: vdc()-- cryptfs encryptFstab
+[   13.373859][    T1] init: Userdata mounted using (default fstab) result : 6
+[   13.374065][    T1] init: Keyring created with id 92814474 in process 1
+[   13.374387][    T1] init: Command 'mount_all --late' action=late-fs (/vendor/etc/init/hw/init.mt6833.rc:159) took 1733ms and succeeded
+[   13.376088][    T1] init: Command 'write /sys/kernel/tracing/trace_marker E' action=late-fs (/vendor/etc/init/hw/init.mt6833.rc:160) took 0ms and failed: Unable to write to file '/sys/kernel/tracing/trace_marker': Unable to write file contents: Bad file descriptor
+[   13.376868][    T1] init: processing action (late-fs) from (/vendor/etc/init/android.hardware.security.keymint.mitee@3.0-service.rc:7)
+[   13.378022][  T128] CDH-GOLD-KEYMINT-RC-V3-LATEFS\n
+[   13.378230][  T128] init: wait for '/dev/hvc3' took 0ms
+[   13.378886][  T128] CDH-GOLD-KEYMINT-RC-V3-LATEFS-STARTING\n
+[   13.378986][    T1] init: service 'vendor.keymint-mitee' requested start, but it is already running (flags: 132)
+[   13.379479][    T1] init: processing action (post-fs-data) from (/system/etc/init/hw/init.rc:783)
+[   13.379794][    T1] init: starting service 'exec 8 (/system/bin/vdc checkpoint prepareCheckpoint)'...
+[   13.380986][    T1] init: failed write pid 320 to memcg
+[   13.381417][    T1] init: ... started service 'exec 8 (/system/bin/vdc checkpoint prepareCheckpoint)' has pid 320
+[   13.381701][    T1] init: SVC_EXEC service 'exec 8 (/system/bin/vdc checkpoint prepareCheckpoint)' pid 320 (uid 1000 gid 1000+0 context default) started; waiting...
+[   13.383906][  T320] vdc: vdc()++ checkpoint prepareCheckpoint
+[   13.384465][  T234] Checkpoint: cp_prepareCheckpoint called
+[   13.384690][  T320] vdc: vdc()-- checkpoint prepareCheckpoint
+[   13.385073][    T1] init: Service 'exec 8 (/system/bin/vdc checkpoint prepareCheckpoint)' (pid 320) exited with status 0 waiting took 0.003000 seconds
+[   13.385424][    T1] init: Sending signal 9 to service 'exec 8 (/system/bin/vdc checkpoint prepareCheckpoint)' (pid 320) process group...
+[   13.385776][    T1] libprocessgroup: Removed cgroup /sys/fs/cgroup/uid_1000/pid_320
+[   13.386927][    T1] init: starting service 'exec 9 (/system/bin/vdc --wait cryptfs enablefilecrypto)'...
+[   13.387559][    T1] init: failed write pid 321 to memcg
+[   13.387864][    T1] init: ... started service 'exec 9 (/system/bin/vdc --wait cryptfs enablefilecrypto)' has pid 321
+[   13.388157][    T1] init: SVC_EXEC service 'exec 9 (/system/bin/vdc --wait cryptfs enablefilecrypto)' pid 321 (uid 0 gid 0+0 context default) started; waiting...
+[   13.389624][  T321] vdc: vdc()++ cryptfs enablefilecrypto
+[   13.390015][  T234] vold: write_file_bootprof: Failed to open /proc/bootprof: No such file or directory
+[   13.390442][  T234] vold: fscrypt_initialize_systemwide_keys
+[   13.390717][  T234] vold: write_file_bootprof: Failed to open /proc/bootprof: No such file or directory
+[   13.391106][  T234] vold: Creating new key in /data/unencrypted/key
+[   13.397582][  T234] vold: keystore2 Keystore generateKey returned service specific error: -67
+[   13.397818][  T234] vold: Failed to generate rollback-resistant key.  This is expected if keystore doesn't support rollback resistance.  Falling back to non-rollback-resistant key.
+[   13.401572][  T234] vold: write_file_bootprof: Failed to open /proc/bootprof: No such file or directory
+[   13.401845][  T234] vold: start backup
+[   13.402046][  T234] vold: write_file_bootprof: Failed to open /proc/bootprof: No such file or directory
+[   13.402075][  T322] vold: src: /data/unencrypted/key/encrypted_key dst: /data/unencrypted/key_back/encrypted_key
+[   13.402686][  T234] vold: write_file_bootprof: Failed to open /proc/bootprof: No such file or directory
+[   13.402748][  T322] vold: src: /data/unencrypted/key/keymaster_key_blob dst: /data/unencrypted/key_back/keymaster_key_blob
+[   13.403056][  T234] vold: Wrote system DE key reference to:/data/unencrypted/ref
+[   13.403348][  T322] vold: src: /data/unencrypted/key/secdiscardable dst: /data/unencrypted/key_back/secdiscardable
+[   13.403526][  T234] vold: write_file_bootprof: Failed to open /proc/bootprof: No such file or directory
+[   13.403863][  T322] vold: src: /data/unencrypted/key/stretching dst: /data/unencrypted/key_back/stretching
+[   13.404330][  T234] vold: write_file_bootprof: Failed to open /proc/bootprof: No such file or directory
+[   13.404330][  T322] vold: src: /data/unencrypted/key/version dst: /data/unencrypted/key_back/version
+[   13.404663][  T234] vold: write_file_bootprof: Failed to open /proc/bootprof: No such file or directory
+[   13.405199][  T234] vold: write_file_bootprof: Failed to open /proc/bootprof: No such file or directory
+[   13.405553][  T234] vold: Wrote per boot key reference to:/data/unencrypted/per_boot_ref
+[   13.405817][  T234] vold: write_file_bootprof: Failed to open /proc/bootprof: No such file or directory
+[   13.406132][  T321] vdc: vdc()-- cryptfs enablefilecrypto
+[   13.406520][    T1] init: Service 'exec 9 (/system/bin/vdc --wait cryptfs enablefilecrypto)' (pid 321) exited with status 0 waiting took 0.018000 seconds
+[   13.406877][    T1] init: Sending signal 9 to service 'exec 9 (/system/bin/vdc --wait cryptfs enablefilecrypto)' (pid 321) process group...
+[   13.407247][    T1] libprocessgroup: Removed cgroup /sys/fs/cgroup/uid_0/pid_321
+[   13.407621][    T1] init: Encryption policy of /data/bootchart set to ea932b52c4893ebbd7d203f74b09702c v2 modes 1/4 flags 0xa
+[   13.407946][    T1] fscrypt: AES-256-CTS-CBC using implementation "cts-cbc-aes-ce"
+[   13.408157][    T1] init: Command 'copy /data/system/entropy.dat /dev/urandom' action=post-fs-data (/system/etc/init/hw/init.rc:805) took 0ms and failed: Could not read input file '/data/system/entropy.dat': open() failed: No such file or directory
+[   13.408838][    T1] init: Encryption policy of /data/vendor set to ea932b52c4893ebbd7d203f74b09702c v2 modes 1/4 flags 0xa
+[   13.409244][    T1] init: Encryption policy of /data/anr set to ea932b52c4893ebbd7d203f74b09702c v2 modes 1/4 flags 0xa
+[   13.409663][    T1] init: Encryption policy of /data/tombstones set to ea932b52c4893ebbd7d203f74b09702c v2 modes 1/4 flags 0xa
+[   13.411591][    T1] init: starting service 'tombstoned'...
+[   13.411864][    T1] init: Created socket '/dev/socket/tombstoned_crash', mode 666, user 1000, group 1000
+[   13.412152][    T1] init: Created socket '/dev/socket/tombstoned_intercept', mode 666, user 1000, group 1000
+[   13.412447][    T1] init: Created socket '/dev/socket/tombstoned_java_trace', mode 666, user 1000, group 1000
+[   13.413801][    T1] init: failed write pid 324 to memcg
+[   13.415012][    T1] init: ... started service 'tombstoned' has pid 324
+[   13.415266][    T1] init: Switched to default mount namespace
+[   13.415574][    T1] init: Encryption policy of /data/misc set to ea932b52c4893ebbd7d203f74b09702c v2 modes 1/4 flags 0xa
+[   13.416367][    T1] init: starting service 'exec 10 (/system/bin/vdc keymaster earlyBootEnded)'...
+[   13.417024][    T1] init: failed write pid 325 to memcg
+[   13.417311][    T1] init: ... started service 'exec 10 (/system/bin/vdc keymaster earlyBootEnded)' has pid 325
+[   13.417578][    T1] init: SVC_EXEC service 'exec 10 (/system/bin/vdc keymaster earlyBootEnded)' pid 325 (uid 1000 gid 1000+0 context default) started; waiting...
+[   13.419130][  T325] vdc: vdc()++ keymaster earlyBootEnded
+[   13.419525][  T234] incfs: Initial API level of the device: 33
+[   13.419750][  T234] incfs: ro.incremental.enable: yes
+[   13.420012][  T234] incfs: isFsAvailable: true
+[   13.420149][  T234] incfs: isFsAvailable: true
+[   13.420369][  T234] incfs: IncFs_Features: v2
+[   13.426061][  T292] fscrypt: AES-256-XTS using blk-crypto-fallback
+[   13.439417][  T234] vold: keystore2 Keystore earlyBootEnded returned service specific error: -68
+[   13.439698][  T325] vdc: vdc()-- keymaster earlyBootEnded
+[   13.440146][    T1] init: Service 'exec 10 (/system/bin/vdc keymaster earlyBootEnded)' (pid 325) exited with status 0 waiting took 0.022000 seconds
+[   13.440493][    T1] init: Sending signal 9 to service 'exec 10 (/system/bin/vdc keymaster earlyBootEnded)' (pid 325) process group...
+[   13.440930][    T1] libprocessgroup: Removed cgroup /sys/fs/cgroup/uid_1000/pid_325
+[   13.441292][    T1] init: Encryption policy of /data/property set to ea932b52c4893ebbd7d203f74b09702c v2 modes 1/4 flags 0xa
+[   13.441691][  T125] init: Loading properties from /system/rw.prop took 0ms.
+[   13.441973][  T125] init_hook_E: Could not find /cust/cust_variant and /data/miui/cust_variant 
+[   13.442341][  T125] init_hook_I: cust prop white key: persist.sys.timezone
+[   13.442527][  T125] init_hook_I: cust prop white key: ro.carrier.name
+[   13.442695][  T125] init_hook_I: cust prop white key: ro.miui.cust_variant
+[   13.442876][  T125] init_hook_I: cust prop white key: ro.miui.region

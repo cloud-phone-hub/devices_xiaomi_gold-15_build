@@ -7,7 +7,8 @@
   2. 拷贝引导盘到目标目录产物 vda.img，并以官方 super.img（pack_super 注入 vendor/
      vendor_dlkm 后的 SUPER_DIST）GPT 原位替换其 super 分区（官方 9.1GB <= 底包 12.8GB
      分区，原地写入）；
-  3. 生成空 data.qcow2 稀疏种子（daemon 以可写 overlay 叠于其上）。
+  3. 生成 data.qcow2 稀疏种子（daemon 以可写 overlay 叠于其上）。
+  4. 空分区预格式化：vda 内 metadata -> ext4（容量按 GPT），data -> f2fs（见 blankfmt.py）。
 
 目标目录（VERSION_DIR，daemon 运行盘集）：
   /Volumes/work/cloud-phone-hub/out/device/gold-15/15/os3.0.5.0.vnqmixm/{vda.img,data.qcow2}
@@ -33,6 +34,7 @@ from buildenv import (  # noqa: E402
     VENDOR_BOOT_DIST, VERSION_DATA, VERSION_DIR, VERSION_VDA,
 )
 from buildenv import _qemu_img  # noqa: E402
+import blankfmt  # noqa: E402
 import lpmemeta  # noqa: E402
 
 # super 内逻辑分区（无槽位名），供 --list-partitions 遍历展示
@@ -362,21 +364,36 @@ def _ensure_vda_raw():
 
 
 def _make_data_qcow2(force, dry_run):
+    """生成 /data 稀疏种子——**已预格式化 f2fs**（见 blankfmt.py 的取证说明）。"""
     if os.path.isfile(VERSION_DATA) and not force:
         print(f"[ok] data.qcow2 已就位（跳过）: {os.path.getsize(VERSION_DATA)} B")
         return
     if dry_run:
-        print(f"[..] (dry) 将生成 data.qcow2（{DATA_VIRT_BYTES} B 稀疏）")
+        print(f"[..] (dry) 将生成已预格式化（f2fs）的 data.qcow2：{DATA_VIRT_BYTES} B")
         return
-    qemu_img = _qemu_img()
-    cmd = [qemu_img, "create", "-f", "qcow2",
-           "-o", "compat=1.1,cluster_size=65536",
-           VERSION_DATA, str(DATA_VIRT_BYTES)]
-    res = subprocess.run(cmd, capture_output=True, text=True)
-    if res.returncode != 0:
-        print(f"[err] qemu-img 创建失败: {res.stderr.strip()}")
+    blankfmt.data_f2fs_qcow2(VERSION_DATA, DATA_VIRT_BYTES)
+    print(f"[ok] data.qcow2（f2fs 预格式化）-> {VERSION_DATA}"
+          f"（{os.path.getsize(VERSION_DATA)} B）")
+
+
+def _preformat_metadata(vda_path, dry_run=False):
+    """把 vda 内 /metadata 分区预格式化为 ext4（空分区运行期 format 会被 SELinux 拒）。
+
+    复用已有 GPT 定位与原地写入（patch_partition）：容量校验天然生效。
+    """
+    loc = _locate_partition(vda_path, "metadata")
+    if loc is None:
+        print("[warn] vda 内无 metadata 分区，跳过预格式化")
+        return
+    _offset, capacity, _kind = loc
+    if dry_run:
+        print(f"[..] (dry) 将把 metadata 分区（{capacity} B）预格式化为 ext4")
+        return
+    img = os.path.join(WORK_DIR, "metadata.ext4.img")
+    blankfmt.metadata_ext4(img, capacity)
+    if patch_partition(vda_path, "metadata", img) != 0:
         sys.exit(1)
-    print(f"[ok] data.qcow2: {os.path.getsize(VERSION_DATA)} B")
+    os.remove(img)
 
 
 def pack(force=False, dry_run=False):
@@ -386,6 +403,7 @@ def pack(force=False, dry_run=False):
     vda_src = _ensure_vda_raw() if not dry_run else None
     if dry_run:
         print(f"[..] (dry) 将拷贝底包 vda.raw -> {VERSION_VDA} 并 GPT 替换 super（{SUPER_DIST}）")
+        _preformat_metadata(VERSION_VDA, dry_run=True)
         _make_data_qcow2(force, dry_run)
         return 0
     if not os.path.isfile(SUPER_DIST):
@@ -430,7 +448,11 @@ def pack(force=False, dry_run=False):
     else:
         print(f"[warn] 缺 patch.img: {PATCH_DIST}（先 build-patch），vdc 将不挂载 /mnt")
 
-    # 2) data.qcow2 稀疏种子
+    # 3) 空分区预格式化：/metadata(ext4) 与 /data(f2fs)
+    #    云机盘集是全新的，运行期 format 会被 e2fs 域的 SELinux 拒（见 blankfmt.py）。
+    _preformat_metadata(VERSION_VDA)
+
+    # 4) data.qcow2 稀疏种子（已预格式化 f2fs）
     _make_data_qcow2(force, dry_run)
     return 0
 
