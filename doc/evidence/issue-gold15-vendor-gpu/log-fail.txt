@@ -132,3 +132,168 @@ boot.img（v4 header: 'ANDROID!' + header_version=4 + header_size=1584 + kernel_
   kernel@offset 4096 sha256 019f04a1… == chain22 Image sha256 b7dc253f…
 Image 内格式表序列搜索：b'XR24AR24BX24BA24RX24RA24XB24AB24RGB8C8  ' 命中 @19963896
   → v34 内核确在 run31 运行；补丁 9 生效但 -22 与格式无关（真根因见 log-pass.txt 的 run32 段）
+
+## run36/37/38 —— 补丁 (12) 后新模块连续三轮不生效（发布链路弯路，2026-10-10）
+
+实例 qemu.log 计数（判据统计口径 = grep 实例 qemu.log，勿用 guest dmesg——环形缓冲
+被 connysdrv wmt_loader/wmt_launcher 刷屏冲掉早期日志）：
+
+```
+run36: stride_reject(Stride 72)=31 bad_padding=0 egl_abort(eglCreateSyncImpl)=31 probe(cdh-mali:)=0
+run37: stride_reject=60 bad_padding=0 egl_abort=60 probe=0
+run38: stride_reject=33 bad_padding=0 egl_abort=33 probe=0
+```
+
+三层排查（每层补一步、下一轮实例才验证到）：
+1. boot.img 只含 built-in 内核，mali_kbase.ko 在 vendor_dlkm → 跑 build-vendor_dlkm.py；
+2. guest ko 仍为旧 1255344 B → build-vendor_dlkm.py 从 out/dist/kernel/modules/ 取产物，
+   dist 里是 12:36 chain26 的旧 ko → 必须先 cp out/kernel/modules/*.ko out/dist/kernel/modules/；
+3. 重建后 run38 依旧 → pack-roms.py 只把现成 super.img 写进 vda，vendor_dlkm 是 super
+   子分区 → 必须 build-super.py 或 lpmemeta 单替换更新 super.img。
+
+误判实录（md5 双行陷阱）：
+  adb shell md5 /lib/modules/mali_kbase.ko 2>/dev/null; md5 -q <宿主ko>
+两行输出相同 → 误判 guest=新模块。实际 guest md5 命令失败被 2>/dev/null 吞掉，
+两行都是宿主值。验证 guest ko 一律用文件大小 + 时间戳（ls -l / cat /proc/modules）。
+
+## run39 —— stride 放行生效，Bad padding 新层（-EINVAL 同一 abort 链，2026-10-10）
+
+计数：stride_reject=0（放行生效）bad_padding=68 egl_abort=68 probe=16 行（4 次提交×4 行）。
+
+qemu.log 原始现场（首条链）：
+
+```
+[   26.133726][  T829] mali mali.0: cdh-mali: stride=72 submit nr_atoms=4, first atom:
+[   26.135180][  T829] cdh-mali: 00000000: 0000000000000000 b4000070454a9e90 b400006fb54393a0 b4000071a7c0a000
+[   26.135181][  T829] cdh-mali: 00000020: 0000000000000000 0000000000000001 0000020900000301 0000000000000000
+[   26.135189][  T829] mali mali.0: Bad padding byte 0: 3
+```
+
+解读（print_hex_dump groupsize=8 按 %016llx 小端 u64 打印，第三组内存字节序 =
+01 03 00 00 09 02 00 00）：
+  +0x28 atom_number=01（prio/device_nr/jobslot=0）
+  +0x2C core_req=0（11.46 把 core_req 迁到 +0x34，值 0x00000209 soft job 位）
+  +0x30 renderpass_id=01
+  +0x31 padding[0]=0x03 ← 「Bad padding byte 0: 3」实锤（11.46 新字段，落 v2 padding 区）
+  +0x38-0x3F 全 0
+→ 72B atom 是 v2 padding 区复用而非尾部追加；copy 进来的 56 字节里 padding 非零，
+  [mali_kbase_jd.c:1095-1102] 零检查 -EINVAL → 1de2160 abort thunk → SF 崩（同 run35 链）。
+→ 修法 = 补丁 (12b)：stride==72 分支豁免 padding 校验（字节内核不消费）。
+   终验见 log-pass.txt run40 段（该段 guest 侧判据已于同日勘正，见下方 run41 段一）。
+
+############################################################################
+## run41 —— run40 误判勘正 + 新卡点：SF mali-cmar-backend SEGV 5 秒循环（2026-10-10）
+############################################################################
+
+### 一、勘正：run40 的「L1 达成 / boot_completed=1」系跨实例误判
+
+- 实例端口映射（按 QEMU cmdline hostfwd 现场确认）：gold-15/40 的 adb =
+  127.0.0.1:5911；5919 是另一项目 15r-16/56 实例（OnePlus CPH2769、
+  Android 16、无 /dev/mali0）。
+- run40 段原记「boot_completed=1、SF running PID 1039、zygote 847/
+  system_server 980、稳定 40+ 分钟」全部取自 5919（OnePlus，其 SF PID
+  恰亦为 1039），不属本设备；取判据时对 `getprop ro.product.model /
+  ro.build.fingerprint` 缺席核验。
+- qemu.log（本设备 serial console，真实）侧判据不受影响：eglCreateSync
+  abort 0 次、Stride 72 计数 0、Bad padding 计数 0、探针 16 行/boot——
+  补丁 (12)+(12b) 放行 72B job atom 的效果真实，该层闭环成立。
+- 但 L1（SF 存活 + boot_completed=1）从未在本设备达成：SF 全程处于本段
+  所述 mali-cmar-backend SEGV 5 秒循环。log-pass.txt run40 段已同日修正。
+- 教训登记 solution.md §5.6：跨实例取 guest 判据必须先核 getprop
+  ro.product.model / ro.build.fingerprint；hostfwd 端口↔实例映射必须从
+  本实例 QEMU cmdline 现场确认，不得沿用记忆。
+
+### 二、新卡点现场：SF 每次拉起 ~26ms 后 SEGV_ACCERR 于 mali-cmar-backend 线程
+
+计数（log-run40-41-malicmar-capture.txt 全量统计，boot 以 Linux version
+banner 分界）：
+
+```
+boot1: mali_cmar_segv=137  sf_总崩=137  cdh-mali 探针=16 行（4 提交×4 行）
+boot2: mali_cmar_segv=98   sf_总崩=98   cdh-mali 探针=16 行
+全程: stride72=0  bad_padding=0  eglCreateSync=0（旧三层卡点计数全 0）
+```
+
+即 SF 的全部崩溃均为 mali-cmar-backend 一种；init 每 5s 拉起一次、起来即崩。
+
+首崩时序（boot1，qemu.log L7880-7895）：
+
+```
+01-01 00:00:25.736  798  798 D SurfaceFlinger: Setting power mode 0 on display 4627039422300187648
+01-01 00:00:25.736  798  798 D SurfaceFlinger: Setting power mode 2 on display 4627039422300187648
+01-01 00:00:25.736  587  587 I hwcomposer: [HWC] displaySetPowerMode display:0 mode:2 (flow_seq:1)
+01-01 00:00:25.736  587  587 I hwcomposer: [HWCDisplay] [XMFP]: Display(0) SetPowerMode(2) …
+01-01 00:00:25.737  798  825 I GrallocExtra: gralloc_extra_query:is_SW3D 0   ← 首帧 buffer 流转开始
+01-01 00:00:25.762  798  839 F libc    : Fatal signal 11 (SIGSEGV), code 2 (SEGV_ACCERR),
+                                        fault addr 0x7a6ab47571 in tid 839 (mali-cmar-backe),
+                                        pid 798 (surfaceflinger)
+```
+
+→ 崩溃时机 = HWC SetPowerMode(2) 显示上电 + SF 首帧合成启动后 26ms，
+  每次 init 拉起后时序相同。
+→ 抽验 6 条崩溃行（boot1/boot2 各阶段）：fault addr 页内偏移恒 0x571
+  （0x7a6ab47571 / 0x7828334571 / 0x7341b58571 / 0x73ccf4d571 /
+  0x794f758571 / 0x6fffb52571），ASLR 下偏移一致 → 确定性写只读段，
+  非随机野指针。
+
+### 三、崩点反汇编（tombstone + objdump 双源定位）
+
+tombstone（/data/tombstones，前轮 adb 取证）：`#00 pc 0x1cf2488
+libGLES_mali.so`，BuildId 839bafe942188cd7（53MB so，全量反汇编吻合）。
+cmarp_backend_thread（0x1cf2170 起）主循环：
+
+```
+prctl(15, "mali-cmar-backend")                       ← 线程自命名
+poll(sp+0x10, 4, timeout)                            ← 4 个 fd
+read(fd=[x19+0x654], buf=sp+0xf8, 8)                 ← 信号 fd
+read(fd=[x19+0],  buf=sp+0x30, min(n,8)*24)          ← 24 字节事件条目流
+遍历条目（+0x00 flags / +0x04 byte / +0x08 u64 / +0x10 ptr），
+仅处理 flags&0x1800==0x1800 或 ==0x1000 的条目：
+  1cf2454: ldr  x8, [x23, #0x10]     ← 条目 +0x10 指针
+  1cf2480: ldr  x8, [x8, #0x18]      ← 对象 +0x18 指针 → so+0x1F0470（只读段）
+  1cf2488: strb wzr, [x8, #0x101]    ← SEGV_ACCERR：fault = so+0x1F0571
+```
+
+- so+0x1F0470 位于 libGLES_mali.so 只读数据段（python seek 直读文件内容
+  核实），被当「可写对象」解引用 → DDK 把只读静态模板当实例对象写。
+- 相关字符串：`cmarp_backend_thread`、`Failed to close render list fd for
+  CMAR signal flag (error %d)`、perfetto 数据源
+  `cctx_memory_class_cmar_{hmem,prof_dump,signal,flush_chain,metadata_list}`、
+  属性 `vendor.mali.cctx_memory_class_cmar_*` → CMAR = DDK 11.46 内存管理
+  后台线程，事件条目由 DDK 自己的 GL 线程生产。
+
+### 四、fd1 真身排除：非内核 TLSTREAM/PRFCNT fd，是 DDK 内部事件管道
+
+- kbase r49p0：TLSTREAM_ACQUIRE = ioctl nr 18（0x40408012），成功返回
+  anon fd「[mali_tlstream]」，受 timeline_is_permitted() 管控
+  （mali_kbase_timeline_io.c:88，kbase_unprivileged_global_profiling 默认 0）；
+  PRFCNT_SETUP = nr 57。
+- DDK 反汇编全量提取 ioctl 号构造序列（movz w?, #0x80xx + movk w?,
+  #0xTTTT, lsl #16 模式，43 处）：无 nr 18 / nr 57 → DDK 不打开内核
+  timeline/perfcnt fd。
+- 结论：backend 线程 poll 的 fd1 是 DDK 内部事件管道（字符串
+  「render list fd」所指），生产者与消费者同在 DDK 进程内 → 崩因指向
+  DDK 内部时序/初始化问题（只读静态模板未替换为可写实例、或受 guest
+  timekeeping 错乱影响的超时 fallback），而非内核侧 fd 格式错配。
+- 待运行时取证（下一 run）：恢复 adb 后抓 /proc/<sf>/fd + readlink 定
+  fd1 具体指向（pipe/eventfd/memfd），为修复定层。
+
+### 五、伴生问题登记：guest timekeeping 从 boot 起错乱
+
+- tombstone 报 SF 进程 uptime 172801s（实际 <25s）；/proc/uptime =
+  173991s（QEMU 实跑 ~28min）；dmesg/logcat 秒数正常 → 从 boot 起即坏，
+  非渐进漂移。
+- 影响面：CMAR backend poll timeout、fence/watchdog 等所有时间敏感
+  逻辑，可能是本卡点诱因之一。独立伴生问题，待查 QEMU virt 时钟源 /
+  DT chosen。
+
+### 证据文件
+
+- 完整双 boot serial 记录：`log-run40-41-malicmar-capture.txt`（147MB /
+  117 万行，本轮 qemu.log 快照；2 条 Linux version 6.6.127-4k-cdh banner
+  分界）。
+- tombstone 原件在实例 /data/tombstones/；崩点反汇编摘录如上。
+
+→ 下一步：重启实例恢复 adb → /proc/<sf>/fd + tombstone 复取 → 定 fd1
+  真身 → 依「DDK 内部时序/初始化」方向定修复方案（内核侧能做的面 +
+  需绕开的面）。

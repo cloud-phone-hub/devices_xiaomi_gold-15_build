@@ -13,8 +13,13 @@
   CREATE_SESSION→dumb(8bpp)→AddFB2 全链打通——`[DPY] connected: 1`、composer 存活
   不再 abort、RenderEngine GL 栈活（Mali-G57 v1.r49p1）。补丁 9（格式表 RGB332/C8）
   打错地方（-22 真根因是 `fb_modifiers_not_supported`，与 fourcc 无关），保留无害。
-  当前唯一阻塞 = **SF RenderEngine `output buffer not gpu writeable`**
-  （primeShaderCache 输出 buffer usage 缺 HW_RENDER 位，gralloc 分配链，见 §6.10）。
+  **eglCreateSync abort 层闭环**（2026-10-10，run35-40，补丁 11v2/12/12b）：GED 桥
+  -129 消除（run35）、`output buffer not gpu writeable` 随 gralloc 分配链打通而消除、
+  user DDK 11.46 的 72B job atom 经补丁 (12)+(12b) 放行（run40 串口侧计数全 0）。
+  ⚠ **run40 原记「L1 达成」系跨实例误判，同日 run41 勘正**：guest 侧判据误取自
+  OnePlus 15r-16 实例（adb 5919，本设备 adb=5911）——L1（SF 存活 + boot_completed=1）
+  **未在本设备达成**，SF 全程处于 mali-cmar-backend SEGV 5 秒循环（新卡点，
+  log-fail.txt run41 段，详见 §5.5/§5.6）。
 - 计划全文：`build/doc/gpu.md`（§7 实施方案、§7.13 Phase A 实测、§7.14/§7.15 Phase B 实况）
 - 依据：AGENTS.md 约束 2
 
@@ -204,6 +209,80 @@ dummy model 的 tNAx 条目原为 `GPU_ID2_MAKE(9, 0, 8, 1, 0, 0, 0)` → `versi
 > 另注：`log-fail.txt` 里记录的 MTK HWC SIGSEGV 是**次级**问题（composer 在静态初始化期崩），
 > 它排在 EGL 之后；EGL 不通时 SF 先崩，两者会同时出现。
 
+### 5.4 GED 桥（补丁 11v2 + /proc/ged stub，run34-35）
+
+`libgralloc_extra` 的 `ged_ge_alloc/query/get/set` 系列走 `/proc/ged` 私有 ioctl，
+云机上没有 GED 内核模块 → gralloc 分配链失败（`-129 ENOENT` 方向错误码），SF
+primeShaderCache 拿不到合法 buffer（`output buffer not gpu writeable` 的上游）。
+补丁 11v2（MTK dmabuf heap 别名）+ 补丁 12（内核 `/proc/ged` stub，ged_stub.c：
+5 个 ioctl cmd，ALLOC 返回主 fd）。**run35 判据**：`-129` 计数归零、ALLOC 276 次
+全部返回真 fd、RenderEngine GL 上下文建成、无 panic。失败点迁移到
+`eglCreateSyncImpl+604` SIGABRT（§7.22 反汇编闭环：user DDK 11.46 的 atom
+stride=72 超出内核白名单 {48,56,64} → `KBASE_IOCTL_JOB_SUBMIT` -EINVAL →
+纯 abort thunk）。
+
+### 5.5 stride=72 放行（补丁 (12)+(12b)，run36-40）——abort 层闭环；run40「L1 达成」系误判（run41 勘正）
+
+**发布链路弯路（run36-38）**：补丁 (12) 后三轮实例不生效（`Stride 72` 拒绝
+31/60/33 次、探针零命中）。根因 = 内核模块改动进 guest 必须走**五步链**：
+build-kernel → **cp ko 到 `out/dist/kernel/modules/`**（build-vendor_dlkm 从
+dist 取产物）→ build-vendor_dlkm → **super.img 更新**（pack 只刷现成 super，
+vendor_dlkm 是其子分区）→ pack-roms。配套教训：guest ko 验证用**文件大小+时间戳**，
+勿用 `adb shell md5 ... 2>/dev/null`（命令失败被吞、双行都是宿主值，已实测误判）。
+vendor.img 超容挡 build-super 时，可 `lpmemeta.update_partitions` 以现有 super.img
+为基底单替换 vendor_dlkm（vendor 分区无需动，run32-35 已验证内容正确）：
+
+```python
+import sys, os, shutil
+sys.path.insert(0, 'build/scripts')
+from buildenv import SUPER_DIST, VENDOR_DLKM_DIST, TMP_DIR
+import lpmemeta
+work = os.path.join(TMP_DIR, 'super', 'super.work2.img')
+if os.path.exists(work): os.remove(work)
+shutil.copy2(SUPER_DIST, work)   # 基底 = 现有 super.img
+lpmemeta.update_partitions(work, {'vendor_dlkm': VENDOR_DLKM_DIST})
+assert lpmemeta.verify_partition(work, 'vendor_dlkm', VENDOR_DLKM_DIST)
+shutil.copy2(work, SUPER_DIST)
+```
+
+**Bad padding 新层（run39）**：五步链补全后探针命中（16 行）、Stride 72 拒绝归零，
+但失败点前移：`Bad padding byte 0: 3` ×68 → -EINVAL → 同一 abort 链。hexdump
+探针实锤 11.46 的 72B atom 是 **v2 padding 区复用**（+0x31=3 新字段、core_req
+0x209 迁到 +0x34），非「尾部追加」——前 56 字节 copy 路径里 padding 非零触发
+[mali_kbase_jd.c:1095-1102] 零检查。**补丁 (12b)**：stride==72 分支豁免 padding
+校验（该字节内核不消费）。
+
+**run40 终验（串口侧 4 行真实全过；guest 侧 4 行系跨实例误判，2026-10-10 run41 勘正）**：
+
+| 判据 | run39 | run40 | 备注 |
+|---|---|---|---|
+| `Stride 72` 拒绝 | 0 | **0** | 串口 qemu.log，真实 |
+| `Bad padding` | 68 | **0** | 串口 qemu.log，真实 |
+| `eglCreateSyncImpl` abort | 68 | **0** | 串口 qemu.log，真实 |
+| `cdh-mali:` 探针 | 16 行 | 16 行（4 提交×4 行，`<=4` 限次吻合） | 串口 qemu.log，真实 |
+| `init.svc.surfaceflinger` | restarting 循环 | ~~running（PID 1039）~~ | 误取自 OnePlus 15r-16（5919），作废；实况 = mali-cmar SEGV 5s 循环（boot1 137 + boot2 98 次） |
+| `sys.boot_completed` | 空 | ~~1~~ | 同上误判，作废 |
+| zygote64 / system_server PID | — | ~~847 / 980~~ | 同上误判，作废 |
+| ANR / sf_restart | — | ~~0 / 0~~ | 同上误判，作废 |
+
+**结论（run41 勘正后）**：补丁 (12)+(12b) 的真实效果 = 72B atom 放行、
+eglCreateSync abort 归零、GL 上下文建成——该层闭环成立；但 **L1 未达成**，
+新卡点 = SF mali-cmar-backend 线程 SEGV_ACCERR 5 秒循环
+（`libGLES_mali.so+0x1cf2488` 写只读段 so+0x1F0571，见 log-fail.txt run41 段）。
+
+### 5.6 run40 误判教训：guest 判据跨实例误配（2026-10-10 勘正）
+
+- 端口配对搞反：本设备（gold-15/40）adb = 127.0.0.1:5911（按本实例 QEMU
+  cmdline `hostfwd tcp:127.0.0.1:5911-:5555` 现场确认）；5919 是另一项目
+  15r-16/56 实例（OnePlus CPH2769、Android 16、无 /dev/mali0）。
+- run40 的 guest 侧判据（boot_completed=1 / SF PID 1039 / zygote 847 /
+  system_server 980 / 稳定 40+ 分钟）全部取自该 OnePlus 实例——其 SF PID
+  恰亦为 1039，加剧了误判的「自洽」假象。
+- 固化为规则：**跨实例取 guest 判据前必须先 `getprop ro.product.model /
+  ro.build.fingerprint` 核身**；**hostfwd 端口↔实例映射必须从本实例 QEMU
+  cmdline 现场读取**，不得沿用记忆或他处记录；串口 qemu.log 是设备无关的
+  第一现场，计数类判据优先走串口。
+
 ## 6. 遗留 / 下一步
 
 > **约束（用户明确，2026-10-09 重申并收紧）**：厂商 vendor 的图形栈**既不能替换、也不能绕过**。
@@ -260,13 +339,19 @@ dummy model 的 tNAx 条目原为 `GPU_ID2_MAKE(9, 0, 8, 1, 0, 0, 0)` → `versi
    疑与 `SYNC include/config/auto.conf` 刷新依赖有关，待查（影响迭代速度，不影响正确性）。
 9. **A3/A4 仍未取**（厂商 DDK/HWC 初始化 strace、GPUPROPS 最低要求、MEOW 私有协议）：
    注：Phase C 第一/二步已用「服务日志 + sysfs + 反汇编」替代 strace 拿到 HWC 的 KMS 需求面。
-10. **当前唯一阻塞：SF RenderEngine `output buffer not gpu writeable`**（run32 新卡点）：
-   SF primeShaderCache 分配的输出 GraphicBuffer 被自身 `validateOutputBufferUsage` 断言
-   `usage & USAGE_HW_RENDER` 失败 → SIGABRT ~5s 循环（tombstone_10 背架：
-   validateOutputBufferUsage ← drawLayersInternal ← primeShaderCache）。
-   SF 是 system_ext 的 MIUI 编译件，约束下不改 so——方向是查 gralloc（MEOW/mtk 厂商）分配链
-   为何返回的 buffer usage 丢位（真机不崩云机崩）。待取证：分配失败的 gralloc 日志、
-   buffer usage 实值、与 HWC/GPU 会话的关联。
+10. **【已解决，2026-10-10，run35-40】SF RenderEngine `output buffer not gpu writeable`**：
+   根因链比 run32 时的初判更深——gralloc 分配链上游缺 GED 内核桥（`/proc/ged` 私有
+   ioctl）导致 buffer usage/元数据不完整（补丁 12 GED stub 后 run35 判据全过）；
+   随后暴露的 `eglCreateSyncImpl+604` abort 是独立第三层（11.46 72B job atom
+   vs 内核 stride/padding 检查），经补丁 (12)+(12b) 闭环（§5.5）。
 11. **容忍残留**（不阻塞 L1，随后续轮次观察）：dim 层 `C8 4096x4096 hnd:0xFF79E6ED` PRIME
    导入 -22（1 条）；`enableHWVSync/waitNextVsync -1`、`Failed to get presentFence`（私有
    vsync/fence ioctl 未实现，仅打日志）；vendor.xiaomi.h* SEGV 0x0（独立链，待查是否 SF 连锁）。
+12. **容忍残留·odm HAL 拉不起**（run40 登记，均不挡 boot/图形链）：
+   `android.hardware.power.stats-impl.oplus` main+764 `Check failed: s == STATUS_OK`
+   5s 周期 abort；`secure_element-service.qti` 缺 `libQSEEComAPI.so`、
+   `vendor.oplus.hardware.vibrator-service` 缺 `libsoc_helper.so`（linker 期失败）。
+   共同模式：odm HAL 依赖真机硬件/私有 so。
+13. **hexdump 探针待删**（wire-kbase.sh 补丁 (12) 的探针段，注释已标「确认后可删」）：
+   72B 布局已经 run39/40 双证确认；限前 4 次提交、log 量极小，等 HWC 出画验证完
+   随下轮重编一并清理，避免为删探针单独烧一轮增量构建。

@@ -34,7 +34,7 @@
 |---|---|---|
 | [issue-gold15-kernel-pipeline](evidence/issue-gold15-kernel-pipeline/solution.md) | 内核构建流水线接入（四段跑通） | kernel/boot/vendor_boot/vendor_dlkm 通过 |
 | [issue-gold15-keymint-port](evidence/issue-gold15-keymint-port/solution.md) | 移植 Remote KeyMint（原地替换官方 mitee 三件套） | **keymint 端到端可用**（4 实例注册 + keystore2 建钥 + `/data` 元数据加密挂载成功）；引导仍未到 `sys.boot_completed`（已定位：32 位件 ENOEXEC / `/vendor/bin/daemon` 缺失 / `pioneer` 域未移植） |
-| [issue-gold15-vendor-gpu](evidence/issue-gold15-vendor-gpu/solution.md) | 让厂商图形栈跑起来：内核侧虚拟 Mali + virtio-gpu 的 MTK KMS 形态对齐 | **M1 + Phase C 第一~四步达成**（run21-32 计数验证）：`/dev/mali0` 身份 `0x09000003/r0p1`、厂商 DDK 兼容性检查四项归零；connector 改 DSI 后 composer 不再构造期崩；49 个 MTK KMS 属性挂上；CREATE_SESSION 分流（补丁 7）、dumb 8bpp 放宽（补丁 8）、fb modifiers 放行（补丁 10）后 **`connected:1`、composer 存活不 abort、AddFB2 全链通**。当前阻塞 = SF RenderEngine `output buffer not gpu writeable`（primeShaderCache 输出 buffer usage 位，gralloc 分配链，§6.10） |
+| [issue-gold15-vendor-gpu](evidence/issue-gold15-vendor-gpu/solution.md) | 让厂商图形栈跑起来：内核侧虚拟 Mali + virtio-gpu 的 MTK KMS 形态对齐 | **M1 + Phase C + eglCreateSync abort 层闭环**（run21-40 串口计数验证）：`/dev/mali0` 身份 `0x09000003/r0p1`、DDK 兼容性四项归零；connector 改 DSI 后 composer 不再构造期崩；49 个 MTK KMS 属性挂上；CREATE_SESSION 分流、dumb 8bpp 放宽、fb modifiers 放行后 AddFB2 全链通；GED 桥 stub（run35）消除 gralloc -129；stride=72 放行 + padding 豁免（补丁 12/12b，run40 串口计数全 0）闭环 RenderEngine eglCreateSync abort。⚠ run40 原记「L1 达成」系判据误取自他机（OnePlus 15r-16，adb 5919），run41 勘正：**L1 未达成**，新卡点 = SF mali-cmar-backend SEGV 5 秒循环（`libGLES_mali.so+0x1cf2488` 写只读段，run41 取证）。HWC 出画（B2 渲染桥）排其后 |
 
 各自目录内 `log-fail.txt`（阻塞现场）/ `log-pass.txt`（通过现场）为配套原始记录。
 

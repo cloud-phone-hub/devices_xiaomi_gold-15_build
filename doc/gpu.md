@@ -859,3 +859,337 @@ gralloc（MEOW/mtk）分配链的 usage 处理，真机不崩云机崩。子问�
 - SF primeCache 'output buffer not gpu writeable'（本轮下一目标）
 - dim 层 C8 PRIME 导入 -22
 - vendor.xiaomi.h* SEGV 0x0（独立链，待查是否 SF 连锁）
+
+## 7.21 Phase C 第五步：gralloc heap 别名 + dma_coerce（补丁 11 v1→v2）→ GED 桥 stub（补丁 12）（2026-10-10）
+
+### primeCache 断言根因三链闭环（反汇编 + guest 日志 + AOSP libui 语义）
+
+SF tombstone `Cache::primeShaderCache+3592`（0x5d3df8，vtable+96 = drawLayers
+虚调用）→ 反汇编实锤（out/tmp/sf-dump2.txt）：
+- primeShaderCache @0x5d2ff0 两次构造 `GraphicBuffer(128,128,RGBA_8888,1,usage
+  0x300=HW_RENDER|HW_TEXTURE)`（0x5d37d4/0x5d38a0 处 `mov w5,#0x300`）——**usage
+  请求值正常**；
+- drawLayersInternal @0x5c9ed0 → `bl validateOutputBufferUsage`（0x5c9f48）；
+- validateOutputBufferUsage @0x5bbd00：`getUsage()&0x200==0 → __android_log_assert`
+  → LOG_FATAL。
+guest 日志补第三链：`libdmabufheap allocation failed for mtk_mm heap`、
+`Failed to allocate (128 x 128) layerCount 1 format 1 usage 300: -12`。
+闭环：**mali_gralloc 按 heap 名打开 `/dev/dma_heap/mtk_mm(-uncached)`，云机只有
+system/system-uncached → 分配 -12 → libui GraphicBuffer 仅在 allocate 成功后才写
+ANativeWindowBuffer::usage 字段（失败保持 0）→ 断言 0&0x200 → SIGABRT 循环**。
+
+### 补丁 11 v1（MTK heap 别名）：run33 Kernel panic 循环（recipe v36，log-fail）
+
+system_heap.c 注册 6 个 MTK heap 名别名（cached 组=system_heap_ops：
+mtk_mm/mtk_2d_fr_region/mtk_prot_region；uncached 组=system_uncached_heap_ops：
+mtk_mm-uncached/mtk_svp_region-aligned/mtk_wfd_region-aligned），名单来自
+allocator-V2-mediatek.so strings 实测。SELinux 佐证：官方 vendor file_contexts
+已有 mtk heap 标签规则（run32 dmesg：mtk_prot_region → dmabuf_system_secure_heap
+_device）。chain24 构建成功，但 run33 hwcomposer 分配 mtk_mm-uncached buffer 时
+内核 Oops：`dcache_inval_poc` 收到非法地址 0xffffffffc0000000 → level 1
+translation fault → **Kernel panic 循环（qemu.log 31 次 Linux banner）**。
+判据教训：`grep -c 'Linux version'` 会把 fsck.f2fs 打印的宿主（OrbStack）版本串
+误算成重启——判 panic 必须 grep `Kernel panic`/`Internal error`。
+
+### 补丁 11 v2 订正：heap device 补 dma_coerce（recipe v37，run34 部分通过）
+
+上游 system_heap.c:521 **仅给 sys_uncached_heap 做
+`dma_coerce_mask_and_coherent(DMA_BIT_MASK(64))`**——uncached 分配的 map/unmap
+链（`dma_direct_unmap_sg→arch_sync_dma_for_cpu→dcache_inval_poc`）依赖 heap
+device 的 dma_mask，v1 漏做。v2 给每个注册的 MTK heap device 补 coerce（cached
+组对齐处理，无害）；wire-kbase.sh 改为链式补丁（old=v1 文本、new=v2 文本，增量卷
+上 v1 已在）。
+run34 判据：
+- `/dev/dma_heap/` 8 个 heap 全就位（6 MTK 别名 + system/system-uncached）；
+- **无 panic 无 Oops**（Kernel panic/Oops 计数 0）；
+- adb 上线（fsck.f2fs 修复 run33 遗留脏分区后）。
+但分配错误 -12 → **-129**：allocator 服务 `Passing -1 file descriptor as
+non-@nullable AIDL ParcelFileDescriptor`——heap 层通了，暴露新洋葱层。
+
+### GED 桥取证（-129 根因，三 so 反汇编闭环）
+
+- run32 对照：`ged_bridge is not init` 计数 0（heap 层先死，走不到 GED）→ GED 是
+  新暴露层 ✓。
+- **libged.so**（out/tmp/libged-full.txt / libged-bridge.txt）：
+  `ged_bridge_open` = `open("/proc/ged",0)` + `fcntl(fd,2,1)`（FD_CLOEXEC）；
+  `ged_bridge_call(fd,cmd,in,in_len,out,out_len)` = 栈上 40 字节包
+  `{u32 cmd; u32 size=0x28; void* in; u32 in_len; void* out; u32 out_len}` →
+  `ioctl(fd, cmd, 包)`；ioctl 返回非 0 → 记日志返回 1。5 个 cmd 实测
+  （mov w1,#0x67XX + movk w1,#0xc028 组合，均 `_IOWR('g',nr,0x28)`）：
+  **ALLOC=0xc0286764、GET=0xc0286765、SET=0xc0286766、QUERY=0xc0286769、
+  DMABUF_SET_NAME=0xc028676b**。
+  出参消费语义（决定 stub 写法）：ged_ge_get 客户端把 out[0] 预填 1（失败），
+  内核必须写 0 + values；ged_ge_query 客户端预填 rodata 4f40 常量（status 默认
+  1），状态取 out+8；ged_ge_alloc out 预填 -1。
+- **gralloc_extra.so**（out/tmp/gralloc-extra-full.txt）UND 实锢 GED 调用者：
+  `ged_ge_get/query/set/dmabuf_set_name/ged_ge_alloc`。`ge_alloc@31a0` = 3 条
+  指令 `mov w0,#0x16; adr x1,8010; b ged_ge_alloc`——**count=22、values=rodata
+  固定 22 项常量表**（4,272,64,24,60,224,8,16,64,16,2572,4,60,4,96,1024,120,
+  64,4,4,8,428，GED 元数据预算）。`ge_release` 把 `[handle+12]`（=data[0]）当
+  fd 传给 ge_perform_free_sec_hwc——交叉验证 **ge_alloc 返回值 = buffer 主 fd**。
+- **alloc-mtk.so**（out/tmp/alloc-mtk-full.txt）：`mali_gralloc_buffer_allocate`
+  @2e8c8 在 allocator_allocate（dmabufheap，已打通）成功后调 ge_alloc，返回值
+  `str w0,[x8,#12]`（native_handle data[0]）→ **返回 -1 即
+  "Passing -1 file descriptor" → binder 拒绝 → 客户端 -129**。闭环。
+
+### 补丁 12：内核 /proc/ged stub（recipe v38，chain26 构建中）
+
+新文件 [kernel/modules/mali_vgpu/ged-stub/ged_stub.c]，wire-kbase.sh 第八补丁
+接线（拷至 drivers/dma-buf/ + Makefile 幂等追加 obj-y）。要点：
+- `proc_create("ged", 0666, NULL)` + proc_ops(unlocked_ioctl/compat_ioctl)；
+- 40 字节包 `struct ged_bridge_pkt` 与 ged_bridge_call 栈布局逐字段一致；
+- **ALLOC：用 system heap 分配真实 dma-buf（4KB）安装 fd 返回**
+  （`dma_heap_find("system")` + `dma_heap_buffer_alloc` + `dma_buf_fd`，built-in
+  直链内部符号）——该 fd 经 binder 传递并被 mali kbase 导入，必须真 dma-buf；
+- GET/SET/QUERY/SETNAME：status=0 + values 全 0（「特性关闭」默认，客户端预填
+  1/常量，内核不写=失败，必须显式写 0）；
+- 防御：GET count 上限 4096、各 cmd 校验 in_len/out_len、默认 -ENOTTY。
+
+### run35 验证清单（待跑）
+
+判据：
+1. dmesg `cdh_ged:` 日志出现（stub 就位 + ALLOC 被命中）；
+2. allocator `Passing -1` 计数 0、`Failed to allocate ... usage 300` 计数 0；
+3. SF `output buffer not gpu writeable` 断言消失、`init.svc.surfaceflinger=running`；
+4. boot_completed=1 且稳定运行 10+ 分钟；
+5. SELinux avc：`grep -c "denied.*proc.*ged\|denied.*ged"`（预期 0；若
+   enforcing 拦 /proc/ged 需另补 sepolicy——已知潜在下一层）。
+
+### §7.22 run35 结果：-129 消除、GL 上下文建成，新卡点 = job_submit stride=72
+
+run35（recipe v38）判据实测（out/core/daemon/runtime/gold-15/35/qemu.log +
+adb logcat/dmesg）：
+
+1. ✅ `cdh_ged: ready` @0.126s；ALLOC 命中 **276 次**返回真 fd（allocator
+   binder:600_3 与 surfaceflinger 都打开了桥）；
+2. ✅ `Passing -1` 仅 2 次（启动早期残留，ALLOC 打通后不再出现）；
+3. ✅ `output buffer not gpu writeable` crash 计数 0（消失）；
+4. ✅ 无 panic；SELinux 未拦 /proc/ged（avc 计 0）；
+5. ❌ SF 仍 restarting：**RenderEngine SIGABRT 循环**（每 ~5s 一轮，tombstone_29）。
+
+**重大里程碑**：RenderEngine GL 上下文建成——`renderer: Mali-G57 MC4`、
+extensions 完整、mali DDK 与 kbase 通信（`user 11.46 vs kernel 11.45` 仅
+WARN）、dmesg mali job_submit 在跑（`Stride 72 ...` 每 5s）。
+
+#### eglCreateSync abort 根因链（libGLES_mali.so 反汇编闭环）
+
+tombstone 完整背架（#00→#14，out/tmp/egl-sync-a7d370.txt /
+abort-chain-01-02.txt / abort-chain-1de5050.txt / atom-fill-1cf1150.txt）：
+
+```
+#14 eglCreateSyncImpl+604 (0xadd64c)
+#13 0xa7d4ac   bl a3b190（sync 创建主体，尚未返回）
+#12 0xa3b2e0（a3b190 内）→ #11 aa68f0 → #10 aa5be4 → #09 ab0434
+#08 0xaaf7ac → #07 0x1cd60fc → #06 0x1cedb28（1ceda30 内）
+#05 0x1cf1ac0 → #04 0x1cf103c → #03 0x1cf11c4（1cf1150 内，主提交调用点）
+#02 0x1de21a8（1de2160 内）→ #01 0x1f530b0 纯 abort thunk（2 条指令）→ abort
+```
+
+- **0x1de5050 = KBASE_IOCTL_JOB_SUBMIT 包装**：`w1=0x40108002` =
+  `_IOWR(0x80,2,16B)`，参数 `struct kbase_ioctl_job_submit
+  {u64 addr; u32 nr_atoms; u32 stride}`；
+- **0x1de2160 硬编码 stride=72**（`mov w9,#0x48`），其上层 0x1cf1150 的 atom
+  数组步进 `add x22,x22,#0x48` —— **user 11.46 atom 结构 = 72 字节**；
+- 0x1de2160 对 ioctl 非 0 返回**直接走 abort thunk**（1de2160 的 ioctl 包装
+  1de5050 仅 ENOMEM→2/EBUSY→70/其他→1），无 Abort message（对应 tombstone
+  无消息）；
+- 内核 [mali_kbase_jd.c:1038-1045] stride 白名单
+  `{40,48,56}`（offsetof/sizeof × v2/atom）拒收 72 → `-EINVAL` → 上述 abort；
+  dmesg `Stride 72 passed to job_submit isn't supported` 每 5s 一条与 SF 重启
+  周期吻合；
+- 内核结构实测：`base_jd_atom_v2`=48B（renderpass_id@40）、
+  `base_jd_atom`=56B；72 = user 11.46 尾部扩展 24B；
+- 1cf1150 语义：extres 链表阶段 0 回调（1cf1430 虚表 7 项）→ 主提交 → 阶段 1
+  回调；提交前 atoms 从 host extres 指针序列化为 GPU 地址。
+
+#### 补丁 (12)（Phase C·第九补丁，recipe v39-jd-stride72）
+
+wire-kbase.sh 追加两个 patch（锚点缩进已 repr 核对）：
+1. `jd_atom_is_v2` 加 `|| stride == 72`（v2 路径只 copy 前
+   sizeof(v2)=48B，user 尾部 24B 不读，`user_addr += stride` 步进天然按 72，
+   [mali_kbase_jd.c:1123]）；
+2. stride 白名单加 `&& stride != 72`；并加探针：前 4 次 stride=72 提交
+   hexdump 首 atom 全 72 字节（`cdh-mali:` 前缀，run36 dmesg 比对前 48 字节
+   与 kernel v2 兼容性：jc@0/core_req@36/renderpass_id@40/padding 全 0），
+   布局确认后探针可删。
+
+### run36 验证清单（待跑）
+
+判据：
+1. dmesg `cdh-mali: stride=72 submit` hexdump 出现（探针命中）且
+   `Stride 72 ... isn't supported` 不再出现；
+2. hexdump 解读：前 48 字节与 kernel v2 兼容（padding@41-47 全 0，否则
+   [mali_kbase_jd.c:1085-1105] 的 padding 检查会 -EINVAL）；
+3. RenderEngine SIGABRT 消失（crash buffer 无
+   `eglCreateSyncImpl+604` 背架）、`init.svc.surfaceflinger=running`；
+4. boot_completed=1 且稳定运行 10+ 分钟；
+5. 若 abort 迁移到新的调用点 → 继续剥洋葱（记录新背架）。
+
+## 7.23 stride=72 放行落地：发布链路弯路 → Bad padding 新层 → run40 abort 归零（「SF 存活」系误判，run41 勘正）（2026-10-10）
+
+### run36/37/38：新模块连续三轮不生效——发布链路五步教训
+
+补丁 (12) 入 wire-kbase.sh 后，run36/37/38 三轮实例上 `Stride 72` 拒绝依旧、
+探针零命中，计数链（各实例 qemu.log）：
+
+| run | Stride 72 拒绝 | Bad padding | eglCreateSyncImpl abort | 探针 cdh-mali |
+|---|---|---|---|---|
+| 36 | 31 | 0 | 31 | 0 |
+| 37 | 60 | 0 | 60 | 0 |
+| 38 | 33 | 0 | 33 | 0 |
+| 39 | **0** | 68 | 68 | 16 |
+| 40 | **0** | **0** | **0** | 16 |
+
+层层排查结论——**内核模块改动要进 guest 必须走完整五步链**，漏任何一步
+guest 都跑旧模块：
+
+1. `build-kernel.sh`（产物在 `out/kernel/modules/`）→
+2. **`cp out/kernel/modules/*.ko out/dist/kernel/modules/`**（build-vendor_dlkm.py
+   从 **dist** 取产物，不会看 out/kernel！）→
+3. `build-vendor_dlkm.py`（产出 `dist/rom/vendor_dlkm.img`）→
+4. **super.img 更新**（`pack-roms.py` 只把现成 super.img 写进 vda；vendor_dlkm 是
+   super 的子分区，必须 build-super 或 lpmemeta 单替换）→
+5. `pack-roms.py` 刷 vda → 重启实例。
+
+配套教训两条：
+- **md5 误判**：`adb shell md5 ... 2>/dev/null; md5 -q ...` 两行输出相同会误以为
+  guest=新模块——实际 guest 的 md5 命令失败被 `2>/dev/null` 吞掉，两行都是宿主的。
+  应以 **文件大小 + 时间戳** 双重验证。
+- build-super.py 全量路径当时被 vendor.img 超容挡住（10-9 的无关产物 2363490304 B >
+  官方分配 1372213248 B）；vendor 分区内容 run32-35 已验证正常无需动，绕过方式 =
+  以现有 super.img 为基底 `lpmemeta.update_partitions` 单替换 vendor_dlkm（脚本见
+  `solution.md` §5.5）。
+
+### run39：stride 放行生效，Bad padding 新层暴露
+
+五步链补全后 run39 上探针命中、`Stride 72` 拒绝归零，但失败点**前移一层**：
+`mali mali.0: Bad padding byte 0: 3`（每轮 68 次）→ `-EINVAL` → 同一 abort 链。
+
+探针 dump 的首 atom hexdump（run39/40 一致）：
+
+```
+mali mali.0: cdh-mali: stride=72 submit nr_atoms=4, first atom:
+cdh-mali: 00000000: 0000000000000000 b4000070454a9e90 b400006fb54393a0 b4000071a7c0a000
+cdh-mali: 00000020: 0000000000000000 0000000000000001 0000020900000301 0000000000000000
+```
+
+> 解读注意：`print_hex_dump` 的 `groupsize=8` 分支（lib/hexdump.c）按 `%016llx`
+> 小端 u64 打印，故第三组 `0000020900000301` 的内存字节序为
+> `01 03 00 00 09 02 00 00`。
+
+按 v2 布局（mali_base_jm_kernel.h L633-695）逐字节对照 72B atom：
+
+| 偏移 | 值 | v2 字段 | 结论 |
+|---|---|---|---|
+| +0x00 | 0 | jc | soft job（jc=0，type 由低 4 字节定义，无渲染命令） |
+| +0x18/0x20 | 指针/0 | extres_list/nr_extres | 兼容 |
+| +0x28 | 01 | atom_number=1、prio/device_nr/jobslot=0 | 兼容 |
+| +0x2C | 0 | **core_req=0**（11.46 把 core_req 挪到了 +0x34，见下） | 兼容（soft job） |
+| +0x30 | 01 | renderpass_id=1 | 兼容 |
+| +0x31 | **03** | v2 padding[0] —— **11.46 新字段** | `Bad padding byte 0: 3` 的来源 |
+| +0x34 | 0x00000209 | v2 padding[3..6] 区 —— 11.46 疑似把 core_req 迁到此处（0x209 soft job 位） | 内核不消费 |
+
+即 11.46 的 72B atom 不是「v2 尾部追加」而是 **padding 区复用**：前 56 字节
+（sizeof(v2)）之外 kernel copy 路径不会读，但 copy 进来的 56 字节里 padding 区
+带新字段 → [mali_kbase_jd.c:1095-1102] 的 padding 零检查 `-EINVAL`。
+
+### 补丁 (12b)：72B atom 豁免 padding 校验
+
+wire-kbase.sh (12b)：copy 后的 padding 检查对 `stride == 72` 分支豁免——该
+字节落入 kernel `user_atom.padding`（提交后不被消费），忽略即可。同时订正
+hexdump 解读注释（0x209 在 +0x34，非 +0x2C）。
+
+### run40：串口侧判据全过；guest 侧判据误取自他机（同日 run41 勘正，L1 未达成）
+
+实例 40（chain28 产物 + 五步链全跑）实测，对照 run36 清单：
+
+| # | 判据 | 结果 | 勘正备注 |
+|---|---|---|---|
+| 1 | 探针命中 + Stride 72 拒绝消失 | ✅ qemu.log `cdh-mali:` 16 行/boot（4 提交×4 行，`<=4` 限次吻合）；`Stride 72`/`Bad padding` 计数 0 | 串口侧，真实 |
+| 2 | 首 atom 与 v2 兼容 | ✅ hexdump 与 run39 相同布局；padding 区新字段经 12b 豁免 | 真实 |
+| 3 | eglCreateSync SIGABRT 消失 | ✅ run39 abort 68 次 → run40 **0 次**（串口 qemu.log） | 真实；原行尾「SF running」部分作废 |
+| 4 | boot_completed=1 + 稳定 10+ 分钟 | ❌ 作废 | ~~✅~~ 误取自 OnePlus 15r-16/56 实例（adb 5919）；本设备实况 = SF mali-cmar-backend SEGV 5s 循环（boot1 137 + boot2 98 次，见 §7.24） |
+| 5 | abort 是否迁移新调用点 | ❌ **迁移了**：SF 崩点移至 libGLES_mali.so+0x1cf2488（mali-cmar-backend 线程，图形栈内） | 见 §7.24 |
+
+**勘正后结论（run41）**：eglCreateSync abort 卡点闭环成立（串口计数全 0、
+72B job atom 放行、GL 上下文建成）；但 **L1（SF 存活 + boot_completed=1）
+未达成**——SF 全程处于 mali-cmar-backend SEGV 5 秒循环，新卡点见 §7.24。
+（原「里程碑：全链存活」声明基于误取的他机判据，作废。）
+
+### run40 新登记独立链（非图形栈，暂容忍观察）
+
+- `odm/bin/hw/android.hardware.power.stats-impl.oplus`：main+764
+  `Check failed: s == STATUS_OK` SIGABRT，**5 秒周期** servicemanager 拉起即崩
+  （开机 08:00 起持续）。不挡 boot（boot_completed=1 已证明）。
+- `odm/bin/hw/android.hardware.secure_element-service.qti`：linker 缺
+  `libQSEEComAPI.so`；`vendor.oplus.hardware.vibrator-service`：缺
+  `libsoc_helper.so`（同样 5s 周期拉起失败）。
+- 已知：`vendor.xiaomi.hardware.displayfeature SEGV 0x0`、
+  `android.hardware.boot-service.mtk Check failed: impl_.Init()`。
+
+共同模式：odm HAL 依赖真机硬件/私有 so，云机拉不起。均不影响图形链与 boot，
+归容忍清单。
+
+### 遗留
+
+1. **hexdump 探针待删**：72B 布局已确认（run39/40 双证），探针限前 4 次提交、
+   log 量极小；等整个 GPU 栈稳定（HWC 出画验证完）后随下轮重编一并清理。
+2. dmesg 环形缓冲区被 connysdrv（`wmt_loader`/`wmt_launcher`）刷屏冲掉早期
+   日志——判据统计应以实例 qemu.log 为准（qemu.log 含完整 serial console）。
+3. guest timekeeping 从 boot 起错乱（非仅墙钟未同步，run41 升级定性）：
+   `/proc/uptime`=173991s 而 QEMU 实跑仅 ~28min，tombstone 报 SF 进程
+   uptime 172801s（实际 <25s）；dmesg/logcat 秒数正常 → 系统 uptime 口径
+   自 boot 起即坏。稳定性判据以进程 PID/属性为准；该问题影响 CMAR poll
+   timeout、fence/watchdog 等时间敏感逻辑，待独立排查（见 §7.24 伴生问题）。
+4. 下一层卡点：SF mali-cmar-backend SEGV 5 秒循环（L1 未达成，见 §7.24）；
+   B2 出画验证排在它之后（见 §7.8）。
+
+## 7.24 run41：run40 勘正 + 新卡点 mali-cmar-backend SEGV 5 秒循环（2026-10-10）
+
+### run40「L1 达成」勘正（判据跨实例误配）
+
+- guest 侧判据（boot_completed=1 / SF PID 1039 / zygote 847 / system_server
+  980 / 稳定 40+ 分钟）误取自另一项目 15r-16/56 实例（OnePlus CPH2769、
+  Android 16、无 /dev/mali0，adb 5919）；本设备 adb=5911（按本实例 QEMU
+  cmdline `hostfwd tcp:127.0.0.1:5911-:5555` 现场确认）。OnePlus 的 SF PID
+  恰亦为 1039，加剧了自洽假象。
+- 串口侧判据不受影响（真实）：eglCreateSync abort 0、Stride 72/Bad padding
+  0、探针 16 行/boot → 补丁 (12)+(12b) 效果为真，eglCreateSync 层闭环成立。
+- 规则固化（solution.md §5.6）：跨实例取 guest 判据前先
+  `getprop ro.product.model / ro.build.fingerprint` 核身；端口↔实例映射从
+  本实例 QEMU cmdline 现场读取；计数类判据优先走串口 qemu.log。
+
+### 新卡点：SF 全部崩溃 = mali-cmar-backend 线程 SEGV_ACCERR 一种
+
+- 计数（`log-run40-41-malicmar-capture.txt` 全量统计，boot 以 Linux version
+  banner 分界）：boot1=137 / boot2=98，SF 每次被 init 拉起后 ~26ms 崩——
+  时序 = HWC `SetPowerMode(2)` 显示上电 + 首帧 GrallocExtra query 之后。
+  抽验 6 条 fault addr 页内偏移恒 0x571 → ASLR 下确定性写只读段。
+- 崩点（tombstone `#00 pc 0x1cf2488 libGLES_mali.so`，BuildId
+  839bafe942188cd7；objdump 全量反汇编对照）：cmarp_backend_thread
+  （0x1cf2170）poll 4 fd → read 24 字节事件条目流 → 遍历条目（仅
+  flags&0x1800==0x1800 或 ==0x1000）→ 条目+0x10 指针对象 +0x18 指针 =
+  so+0x1F0470（只读数据段）→ `strb wzr,[x8,#0x101]` SEGV_ACCERR
+  （fault = so+0x1F0571）。即 DDK 11.46 的 CMAR（内存管理）后台线程把
+  只读静态模板当可写实例对象。
+- CMAR 线程身份佐证：prctl 自命名 `mali-cmar-backend`；字符串
+  `cmarp_backend_thread`、`Failed to close render list fd for CMAR signal
+  flag (error %d)`、perfetto 数据源
+  `cctx_memory_class_cmar_{hmem,prof_dump,signal,flush_chain,metadata_list}`、
+  属性 `vendor.mali.cctx_memory_class_cmar_*`。
+- fd1 真身排除：DDK 反汇编无 TLSTREAM(nr18=0x40408012)/PRFCNT(nr57) ioctl
+  调用序列 → backend 线程 poll 的 fd1 是 DDK 内部「render list fd」事件
+  管道（生产者=DDK 自己的 GL 线程）→ 崩因指向 DDK 内部时序/初始化问题，
+  非内核 fd 格式错配；内核 kbase 侧 timeline fd 路径（mali_kbase_timeline_io.c
+  的 timeline_is_permitted，默认 0）与此无关。
+- 伴生问题：guest timekeeping 从 boot 起错乱（见 §7.23 遗留 3），CMAR
+  poll timeout 等时间敏感逻辑可能被殃及，待独立排查。
+- 证据：`evidence/issue-gold15-vendor-gpu/log-fail.txt` run41 段（六段式
+  取证全文）+ `log-run40-41-malicmar-capture.txt`（147MB 双 boot 串口快照）。
+
+### 下一步（run42 计划）
+
+1. 重启实例恢复 adb（5911）→ `/proc/<sf>/fd` + readlink 定 fd1 指向
+   （pipe/eventfd/memfd）→ 为修复方案定层：内核侧可做的面（若涉及时钟/
+   DT 供给）vs DDK 内部问题需绕行的面（硬约束：不改厂商 so 字节）。
+2. guest timekeeping 错乱独立取证（clocksource、DT chosen、QEMU virt 时钟）。

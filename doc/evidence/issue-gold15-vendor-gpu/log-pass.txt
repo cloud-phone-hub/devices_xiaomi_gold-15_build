@@ -165,3 +165,55 @@ SF RenderEngine 线程 SIGABRT ~5s 循环：Abort message 'output buffer not gpu
 背架（/data/tombstones/tombstone_10）：RenderEngine::validateOutputBufferUsage ←
   SkiaRenderEngine::drawLayersInternal ← Cache::primeShaderCache（libsurfaceflinger.so system_ext）
 → 指向 gralloc（MEOW/mtk）分配链 usage 位处理，待下一轮剥洋葱
+
+## run40 —— 补丁 (12)+(12b) 终验：eglCreateSync abort 消除（真实）；guest 侧判据误取自 15r-16 实例（2026-10-10，同日修正）
+
+实例 40（chain28 = v39-jd-stride72 recipe + GED stub + 补丁 (12) 放行 stride=72 +
+(12b) padding 豁免，五步发布链全跑）。
+
+> ⚠ **本段 2026-10-10 14:10 重大修正**：原记录「adb 127.0.0.1:5919（对照旧内核实例
+> 5911）」的**端口配对是反的**。按 QEMU cmdline（`-netdev user,…,hostfwd=tcp:127.0.0.1:
+> 5911-:5555`），**gold-15/40 的 adb 端口是 5911**；5919 是另一项目 15r-16/56 实例的
+> hostfwd 端口（OnePlus CPH2769、Android 16、无 /dev/mali0）。当时「boot_completed=1、
+> SF running PID 1039、zygote 847/system_server 980、稳定 40+ 分钟」这组 guest 侧判据
+> 全部取自那台 OnePlus（其 SF PID 恰亦为 1039），**不属本设备**。真机判据核验时对
+> `getprop ro.product.model/fingerprint` 缺席，端口-实例映射未验证——教训登记于
+> solution.md §5.6。qemu.log 侧判据（下）不受影响，真实有效。
+
+qemu.log 计数（对照 log-fail.txt run36-39 段）：
+
+```
+run40: stride_reject=0 bad_padding=0 egl_abort=0 probe=16（4 次提交 × 4 行，<=4 限次吻合）
+```
+
+crash buffer：eglCreateSyncImpl 背架 0 条；图形栈无任何新 SIGABRT/SIGSEGV。
+dmesg "internal error|panic" 计数 5 条全部是 init 的 persist.sys.assert.panic 属性日志（关键词误匹配），无真实 Oops。
+
+~~属性与稳定性实测（两次采样间隔 5+ 分钟）~~ **（已作废，见段首修正：取自 OnePlus
+15r-16/56 实例，非本设备）**
+
+~~```
+$ getprop sys.boot_completed → 1；init.svc.surfaceflinger → running
+$ ps … zygote64 847 / system_server 980 / surfaceflinger 1039
+```
+~~（gold-15/40 的真实状态见 log-fail.txt run41 段：SF 5 秒周期 SEGV、boot_completed 空）
+
+探针 hexdump（与 run39 同布局，佐证 copy 路径一致；本条真实，出自本实例 qemu.log）：
+
+```
+[   25.769930][  T825] mali mali.0: cdh-mali: stride=72 submit nr_atoms=4, first atom:
+[   25.769932][  T825] cdh-mali: 00000000: 0000000000000000 b400007b17112750 b400007b57095ca0 b400007d2f7c0000
+[   25.769933][  T825] cdh-mali: 00000020: 0000000000000000 0000000000000001 0000020900000301 0000000000000000
+```
+
+新登记容忍链（非图形栈、不挡 boot，crash buffer 5s 周期刷屏项）：
+  /odm/bin/hw/android.hardware.power.stats-impl.oplus：main+764 Check failed: s == STATUS_OK
+  /odm/bin/hw/android.hardware.secure_element-service.qti：linker 缺 libQSEEComAPI.so
+  /odm/bin/hw/vendor.oplus.hardware.vibrator-service：linker 缺 libsoc_helper.so
+  （此三条为本设备 crash buffer 实况，真实）
+
+修正后结论：**补丁 (12)+(12b) 的真实效果 = eglCreateSync abort 归零、GL 上下文
+建成、job 提交放行（探针 16 行）——该层闭环；但 L1（SF 存活 + boot_completed=1）
+未达成**：SF 存活从未在本设备上发生，run40 期间即处于 `mali-cmar-backend`
+SEGV 5 秒循环（详见 log-fail.txt run41 段与 `log-run40-41-malicmar-capture.txt`）。
+下一层卡点：cmarp_backend_thread 消费事件流时写 so 只读段 +0x1F0470+0x101。
