@@ -1,0 +1,134 @@
+### 来源：实例 gold-15/16（M1 达成后）qemu.log + adb logcat -b crash
+### 主题：阻塞点已从 GPU（Mali EGL）转移到 MTK 显示栈（HWC/composer）
+
+--- composer@3.3-service SIGSEGV：hwcomposer.mt6833.so 构造 HWCDisplay 时 NULL 解引用 ---
+867:[    3.020097][    T1] init: Parsing file /vendor/etc/init/android.hardware.graphics.composer@3.3-service.rc...
+5442:01-01 00:00:41.455   592   592 D hwcomposer: getHWCMediator default use full-hwc
+5571:01-01 00:00:41.461   643   643 D AEE_AEDV: read processName success [/vendor/bin/hw/android.hardware.graphics.composer@3.3-service]
+5594:01-01 00:00:41.467   647   647 D AEE_AEDV: read processName success [/vendor/bin/hw/android.hardware.graphics.composer@3.3-service]
+5640:01-01 00:00:41.475   592   592 I hwcomposer: [HWCDisplay] (0 HWCDisplay():235), CreateDisplayInfo: type=1 internal=1 main=1 crtc=-1,-1 connector=-1  
+5641:01-01 00:00:41.475   592   592 E hwcomposer: [HWCDisplay] HWC_ASSERT(0) fail: "vendor/mediatek/proprietary/hardware/libhwcomposer/2.0.0/hwcdisplay.cpp", 253L  
+5657:01-01 00:00:41.483   654   654 D AEE_AEDV: read processName success [/vendor/bin/hw/android.hardware.graphics.composer@3.3-service][   46.690573][    T1] libprocessgroup: Removed cgroup /sys/fs/cgroup/uid_1000/pid_1265
+5668:01-01 00:00:41.484   592   592 F libc    : Fatal signal 11 (SIGSEGV), code 1 (SEGV_MAPERR), fault addr 0x1c in tid 592 (composer@3.3-se), pid 592 (composer@3.3-se)
+5773:01-01 00:00:41.575   662   662 F DEBUG   : Cmdline: /vendor/bin/hw/android.hardware.graphics.composer@3.3-service[   46.803798][  T499] AidlLazyServiceRegistrar: Process has 1 (of 1 available) client(s) in use after notification apexservice has clients: 1
+5777:01-01 00:00:41.575   662   662 F DEBUG   : pid: 592, tid: 592, name: composer@3.3-se  >>> /vendor/bin/hw/android.hardware.graphics.composer@3.3-service <<<
+5781:01-01 00:00:41.575   662   662 F DEBUG   : signal 11 (SIGSEGV), code 1 (SEGV_MAPERR), fault addr 0x000000000000001c
+5782:01-01 00:00:41.575   662   662 F DEBUG   : Cause: null pointer dereference
+5800:01-01 00:00:41.575   662   662 F DEBUG   :       #00 pc 000000000012f5ec  /vendor/lib64/hw/hwcomposer.mt6833.so (HWCDisplay::HWCDisplay(unsigned long const&, CreateDisplayInfo const&, android::sp<IOverlayDevice> const&)+2028) (BuildId: bc261131eecd5a8405d6757bfc0a9eff)[   46.845125][    T1] libprocessgroup: Removed cgroup /sys/fs/cgroup/uid_0/pid_810
+5802:01-01 00:00:41.575   662   662 F DEBUG   :       #01 pc 00000000000a6764  /vendor/lib64/hw/hwcomposer.mt6833.so (HWCMediator::initHWCDisplay()+724) (BuildId: bc261131eecd5a8405d6757bfc0a9eff)[   46.853116][    T1] init: Service 'displayfeature' (pid 810) received signal 9 from uid 0 pid 810
+5805:01-01 00:00:41.575   662   662 F DEBUG   :       #02 pc 00000000000a5798  /vendor/lib64/hw/hwcomposer.mt6833.so (HWCMediator::HWCMediator()+1000) (BuildId: bc261131eecd5a8405d6757bfc0a9eff)[   46.857386][    T1] libprocessgroup: Failed to write 1 to /sys/fs/cgroup/uid_0/pid_810/cgroup.kill: No such file or directory
+5807:01-01 00:00:41.575   662   662 F DEBUG   :       #03 pc 00000000000a5380  /vendor/lib64/hw/hwcomposer.mt6833.so (getHWCMediator()+288) (BuildId: bc261131eecd5a8405d6757bfc0a9eff)[   46.861194][    T1] libprocessgroup: Failed to open /sys/fs/cgroup/uid_0/pid_810/cgroup.procs: No such file or directory
+5821:01-01 00:00:41.575   662   662 F DEBUG   :       #11 pc 00000000000139c4  /vendor/bin/hw/android.hardware.graphics.composer@3.3-service (HwcLoader::init(unsigned int, unsigned int, unsigned int)+100) (BuildId: d66e806c09cfcf5bd6f20263445ed738)
+5822:01-01 00:00:41.575   662   662 F DEBUG   :       #12 pc 00000000000075b4  /vendor/bin/hw/android.hardware.graphics.composer@3.3-service (main+180) (BuildId: d66e806c09cfcf5bd6f20263445ed738)
+5859:01-01 00:00:41.593   695   695 V AEE_AED : dashboard_record_update() : rec->module = /vendor/bin/hw/android.hardware.graphics.composer@3.3-service [   46.947851][  T131] init: NtQ Control message: Could not find 'aidl/android.hardware.media.c2.IComponentStore/default' for ctl.interface_start from pid: 218 (/system/bin/servicemanager)
+5876:01-01 00:00:41.593   695   695 D AEE_AED :  1,  3,	    1,	 41,	 /vendor/bin/hw/android.hardware.graphics.composer@3.3-service 
+
+--- boot-service.mtk SIGABRT ---
+861:[    3.011057][    T1] init: Parsing file /vendor/etc/init/android.hardware.boot-service.mtk.rc...
+1762:[   16.825177][  T335] android.hardware.boot-service.mtk: [libfstab] Using Android DT directory /proc/device-tree/firmware/android/
+1763:[   16.827629][  T335] android.hardware.boot-service.mtk: [libfstab] Warning: unknown flag: resize
+2184:[   26.838379][  T335] android.hardware.boot-service.mtk: Could not find bootloader message block device: failed to stat /dev/block/by-name/misc try 1: No such file or directory
+2185:[   26.843642][  T335] android.hardware.boot-service.mtk: failed to stat /dev/block/by-name/misc try 2: No such file or directory
+2186:[   26.845528][  T335] android.hardware.boot-service.mtk: failed to stat /dev/block/by-name/misc try 3: No such file or directory
+
+--- SELinux：SF 读 kbase sysfs 节点被拒（我们的 platform 设备路径与真机不同，官方 file_contexts 匹配不上）---
+3460:[   42.782130][  T224] type=1400 audit(42.652:300): avc:  denied  { read } for  comm="surfaceflinger" name="large_page_conf" dev="sysfs" ino=34355 scontext=u:r:surfaceflinger:s0 tcontext=u:object_r:sysfs:s0 tclass=file permissive=0
+6128:01-01 00:00:41.613   678   689 E libPowerHal: PERF_RES_AI_APUSYS_BOOST_IPU_IF cannot access!!!![   47.266211][  T224] type=1400 audit(47.136:479): avc:  denied  { read } for  comm="surfaceflinger" name="large_page_conf" dev="sysfs" ino=34355 scontext=u:r:surfaceflinger:s0 tcontext=u:object_r:sysfs:s0 tclass=file permissive=0
+12144:01-01 00:00:46.643  1294  1294 D XMLParser: sreLut18 0 1 2 3 4 5 7 10 14 18 21 25 28 32 35 38 41 45 48 51 54 57 60 63 65 67 69 71 73 75 77 79 81 82 83 85 86 87 88 89 91 92 93 94 95 96 97 98 99 100 101 102 103 104 105 106 106 107 108 109 110 110 111 111 111 112 112 112 113 113 114 114 114 115 115 115 116 116 117 117 118 118 118 119 119 120 120 121 121 121 122 122 123 123 124 124 125 125 126 126 126 127 127 128 128 129 129 130 130 131 131 132 132 133 133 134 134 135 135 136 137 137 138 138 139 139 140 140 141 141 142 142 143 143 144 145 145 146 146 147 147 148 148 149 150 150 151 151 152 152 153 154 154 155 155 155 156 157 158 159 160 161 162 163 164 165 166 167 168 169 170 171 172 173 174 175 176 177 178 179 180 181 182 183 184 185 186 187 188 189 190 191 192 193 194 195 196 197 198 199 200 201 202 203 204 205 206 207 208 209 210 211 212 213 214 215 216 217 218 219 220 221 222 223 224 225 226 227 228 229 230 231 232 233 234 235 236 237 238 239 240 241 242 243 244 245 246 247 248 249 250 251 252 253 254 255[   52.330502][  T224] type=1400 audit(52.148:603): avc:  denied  { read } for  comm="surfaceflinger" name="large_page_conf" dev="sysfs" ino=34355 scontext=u:r:surfaceflinger:s0 tcontext=u:object_r:sysfs:s0 tclass=file permissive=0
+17605:[   57.243588][  T224] type=1400 audit(57.100:714): avc:  denied  { read } for  comm="surfaceflinger" name="large_page_conf" dev="sysfs" ino=34355 scontext=u:r:surfaceflinger:s0 tcontext=u:object_r:sysfs:s0 tclass=file permissive=0
+
+### M1 达成后的剩余阻塞现场（2026-10-10，实例 gold-15/18）
+
+--- MTK HWC 对 virtio-gpu card0 的依赖证据（A3 替代证据）---
+01-01 00:00:26.307   583   583 E hwcomposer: [DRMDEV] failed to get drm master info, err: -1  
+01-01 00:00:26.307   583   583 I hwcomposer: [DRMDEV] getCaps(), crtc[id=33|pipe=0x0]  
+01-01 00:00:26.307   583   583 W hwcomposer: [DRMDEV] 0xcccccccc[33] property[OVERLAP_LAYER_NUM] does not do initialize  
+
+--- composer@3.3 SIGSEGV（HWCDisplay NULL deref，fault addr 0x1c）---
+01-01 00:00:26.336   583   583 F libc    : Fatal signal 11 (SIGSEGV), code 1 (SEGV_MAPERR), fault addr 0x1c in tid 583 (composer@3.3-se), pid 583 (composer@3.3-se)
+01-01 00:00:26.376   677   677 F DEBUG   :       #00 pc 000000000012f5ec  /vendor/lib64/hw/hwcomposer.mt6833.so (HWCDisplay::HWCDisplay(unsigned long const&, CreateDisplayInfo const&, android::sp<IOverlayDevice> const&)+2028) (BuildId: bc261131eecd5a8405d6757bfc0a9eff)
+composer_segv_count=33
+
+--- boot-service.mtk abort（Check failed: impl_.Init()）计数---
+boot_impl_init_abort=34
+
+############################################################################
+### Phase C 第一步后的剩余阻塞现场（2026-10-10，实例 gold-15/21）
+### 根因：MTK HWC 要求 CRTC 携带 49 个 MTK 私有 KMS 属性，virtio-gpu 没有
+############################################################################
+
+--- composer HAL 启动日志（pid 596）---
+01-01 00:00:26.007   596   596 E hwcomposer: [DRMDEV] failed to get drm master info, err: -1  
+01-01 00:00:26.007   596   596 I hwcomposer: [DRMDEV] getCaps(), crtc[id=33|pipe=0x0]  
+
+--- 全部 does not do initialize 属性（49 个，crtc id=33 = virtio CRTC）---
+property[AOSP_CCORR_LINEAR]
+property[BL_SYNC_GAMMA_GAIN]
+property[BUFFER_ALLOC_ID]
+property[CAPS_BLOB_ID]
+property[COLOR_TRANSFORM]
+property[COMPRESS]
+property[CSC_BL]
+property[DATASPACE]
+property[DIM_COLOR]
+property[DIRTY_ROI_H]
+property[DIRTY_ROI_NUM]
+property[DIRTY_ROI_W]
+property[DIRTY_ROI_X]
+property[DIRTY_ROI_Y]
+property[DISP_MODE_IDX]
+property[DOZE_ACTIVE]
+property[DYNAMIC_WCG_OFF]
+property[HBM_ENABLE]
+property[HDR_ENABLE]
+property[INTF_BUFF_IDX]
+property[IS_MML]
+property[LAYERING_IDX]
+property[MML_SUBMIT]
+property[MSYNC2_0_ENABLE]
+property[MSYNC2_0_EPT]
+property[NEXT_BUFF_IDX]
+property[OUTPUT_BUFF_IDX]
+property[OUTPUT_DST_HEIGHT]
+property[OUTPUT_DST_WIDTH]
+property[OUTPUT_ENABLE]
+property[OUTPUT_FB_ID]
+property[OUTPUT_HEIGHT]
+property[OUTPUT_SCENARIO]
+property[OUTPUT_WIDTH]
+property[OUTPUT_X]
+property[OUTPUT_Y]
+property[OVERLAP_LAYER_NUM]
+property[OVL_CSC_SET_BRIGHTNESS]
+property[OVL_CSC_SET_COLORTRANSFORM]
+property[OVL_DSI_SEQ]
+property[PANEL_NITS]
+property[PARTIAL_UPDATE_ENABLE]
+property[PLANE_PROP_ALPHA_CON]
+property[PLANE_PROP_PLANE_ALPHA]
+property[PRESENT_FENCE]
+property[STYLUS_MODE]
+property[USER_SCEN]
+property[VPITCH]
+property[WCG_BY_COLOR_MODE]
+
+--- 后果链 ---
+display0_not_connected_count=1520
+01-01 00:00:26.536   843   843 F DEBUG   :       #00 pc 000000000045a7bc  /system_ext/lib64/libsurfaceflinger.so (android::scheduler::Scheduler::dispa
+01-01 00:00:26.536   843   843 F DEBUG   :       #01 pc 0000000000483ed8  /system_ext/lib64/libsurfaceflinger.so (android::SurfaceFlinger::configureLo
+
+--- run31（补丁 9 v34：plane 格式表加 RGB332/C8）验证失败：RGB332 ADDFB 仍 -22（2026-10-10）---
+### 实例 gold-15/31 boot.log（/data/local/tmp/boot.log 落盘流；实例已停，摘自会话取证）
+894165: 01-01 00:18:02.970 E/hwcomposer( 7430): [DRMDEV] failed to add fb ret=-22, w:1080 h:2400 f:38424752 hnd:1 p:1080 o:0
+897147: 01-01 00:18:06.836 E/hwcomposer( 7782): [DRMDEV] failed to add fb ret=-22, w:4096 h:4096 f:20203843 hnd:4282673517 p:4096 o:0
+（f:38424752='RGB8'=DRM_FORMAT_RGB332；f:20203843='C8  '=DRM_FORMAT_C8；每 5s 循环重现）
+### 内核身份疑云裁决（字节级判据链）
+/proc/version: Linux version 6.6.89-android15-8-gbe8d201b0d27-ab13762941-4k (root@0acd6ee907f1)
+  (Ubuntu clang version 21.1.8 (6ubuntu1), Ubuntu LLD 21.1.8) #1 SMP PREEMPT Thu Jul 10 06:35:14 UTC 2025
+  → 编译主机是 Docker 容器（gold-15 构建链），uts 串刻意伪装为 MIUI stock（vendor vermagic 匹配），
+    uname 无法区分任何 v3x 内核——与 dmesg 有 cdh_mtk 打印"矛盾"不成立
+vda GPT: boot_a @0x31fa00000 boot_b @0x324a00000（各 80MB）sha256 == out/dist/rom/boot.img（cd631a6e1f8ee070）
+boot.img（v4 header: 'ANDROID!' + header_version=4 + header_size=1584 + kernel_size=32295424）内
+  kernel@offset 4096 sha256 019f04a1… == chain22 Image sha256 b7dc253f…
+Image 内格式表序列搜索：b'XR24AR24BX24BA24RX24RA24XB24AB24RGB8C8  ' 命中 @19963896
+  → v34 内核确在 run31 运行；补丁 9 生效但 -22 与格式无关（真根因见 log-pass.txt 的 run32 段）

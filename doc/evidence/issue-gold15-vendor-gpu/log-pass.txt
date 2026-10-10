@@ -1,0 +1,167 @@
+### gold-15 厂商图形栈可行性 Phase 0 —— 原始证据（2026-10-09）
+### 结论：门 G0 通过（厂商 Mali/GED 内核模块随 ROM 提供），但存在两道硬门槛（vermagic/符号版本不符、依赖 MTK 子系统并靠 DT probe）。
+
+## 1. 官方 ROM 内的图形相关内核模块（来源 vendor_dlkm_a.img:/lib/modules，共 189 个 .ko）
+
+```
+mali_kbase_mt6833_r49.ko     mali_mgm_mt6833_r49.ko     mali_prot_alloc_mt6833_r49.ko
+ged.ko                       mtk_gpu_hal.ko             mtk_gpu_qos.ko
+mtk_gpufreq_mt6833.ko        mtk_gpufreq_wrapper_legacy.ko
+met_gpu_api.ko               met_gpu_adv_api.ko
+cmdq-bdg-mailbox.ko          cmdq-sec-drv.ko            mtk_disp_sec.ko
+```
+
+命令（容器内）：
+  fsck.erofs --extract=/tmp/m --path=/lib/modules vendor_dlkm_a.img
+  find /tmp/m -name '*.ko' | sed 's#.*/##' | grep -iE 'mali|ged|gpu|drm|disp|m4u|cmdq|smi|ion|dmabuf'
+
+## 2. 模块 vermagic 与依赖（modinfo 实测）
+
+```
+==== ged.ko ====
+vermagic:  6.6.118-android15-8-g4d05d8779bfd-4k SMP preempt mod_unload modversions aarch64
+name:      ged
+depends:   mtk_gpufreq_wrapper_legacy,mtk_gpu_hal,system_heap,mtk_gpu_qos,mediatek-drm,sspm
+alias:     of:N*T*Cmediatek,ged
+
+==== mali_kbase_mt6833_r49.ko ====
+version:   r49p1-03bet0 (UK version 11.46)
+vermagic:  6.6.118-android15-8-g4d05d8779bfd-4k SMP preempt mod_unload modversions aarch64
+name:      mali_kbase_mt6833_r49
+depends:   mtk_gpufreq_wrapper_legacy,ged,mtk_gpu_hal,mrdump,sspm,mtk_gpu_qos
+alias:     of:N*T*Carm,mali-valhall
+
+==== mtk_gpu_hal.ko ====
+vermagic:  6.6.118-android15-8-g4d05d8779bfd-4k SMP preempt mod_unload modversions aarch64
+name:      mtk_gpu_hal
+depends:
+```
+
+对照：本 CDH 内核 `out/kernel/kernelrelease.txt = 6.6.127-4k-cdh`（vermagic 亦为 6.6.127-4k-cdh）
+→ **版本 + 符号 CRC（modversions）双不符 → insmod 会被拒**。
+并且 kbase/ged 均带 `of:` alias（`arm,mali-valhall` / `mediatek,ged`）→ **靠 DT 节点 probe**，QEMU virt 无此节点。
+
+## 3. kbase 架构（strings 实测，决定"能否桥接 virtio-gpu"）
+
+```
+.../mali-r49p1/drivers/gpu/arm/midgard/backend/gpu/mali_kbase_jm_hw.c
+.../mali-r49p1/drivers/gpu/arm/midgard/backend/gpu/mali_kbase_jm_as.c
+.../mali-r49p1/drivers/gpu/arm/midgard/backend/gpu/mali_kbase_jm_rb.c
+.../mali-r49p1/drivers/gpu/arm/midgard/context/backend/mali_kbase_context_jm.c
+.../mali-r49p1/drivers/gpu/arm/midgard/hw_access/backend/mali_kbase_hw_access_real_hw.c
+.../mali-r49p1/drivers/gpu/arm/midgard/hw_access/regmap/mali_kbase_regmap_jm.c
+本地模块大小 1495368 B；未见 CSF / csffw 固件痕迹
+```
+→ **寄存器级 Job Manager 驱动（real_hw）**，下游是 Mali GPU 硬件本身 → 与 virtio-gpu 的 virgl/venus 无语义映射，
+"桥接"等价于实现 Mali-G57 软件模拟器。（详见 ../gpu.md §6）
+
+## 4. 厂商 HAL 用户态的内核接口需求（自 vendor_a.img 提取的 DT_NEEDED + 设备串）
+
+lib64/egl/libGLES_mali.so  → 设备 `/dev/mali`；依赖 libion/libged/libgpud/libgralloc_extra/... 
+lib64/hw/hwcomposer.mt6833.so → 设备 `/dev/dri/card0`；依赖 libdrm/libdpframework/libged/libpq*/composer_ext/...
+
+## 5. 云机内核现状（本设备自编译内核 out/kernel/config）
+
+CONFIG_DRM_VIRTIO_GPU=y / CONFIG_DRM_VIRTIO_GPU_KMS=y
+CONFIG_DMABUF_HEAPS=y / _SYSTEM=y / （_CMA 未开）
+CONFIG_ION              无
+CONFIG_DRM_MEDIATEK     未启用（源码在 kernel/source/drivers/gpu/drm/mediatek，未编）
+CONFIG_MALI*            无；kernel/source 内无任何 Mali 源码
+############################################################################
+### M1 通过现场（2026-10-09，实例 gold-15/16）：虚拟 Mali probe 成功 + /dev/mali0 就位
+############################################################################
+
+--- 判据 1：cdh_mali_plat 注册 platform_device ---
+1332:[    5.034865][  T215] cdh_mali_plat: 已注册 'mali'（占位寄存器窗口 40000000000+100000，NO_MALI 下不映射）
+
+--- 判据 2：kbase probe 全过程（Dummy Model / GPU 身份 / Probed as mali0）---
+[    5.431627][  T213] mali mali.0: Kernel DDK version r49p0-00eac0
+[    5.432431][    T1] init: processing action (ro.build.ab_update=true && init) from (/system_ext/etc/init/init.miui.ext.rc:10)
+[    5.434635][  T213] mali mali.0: Using Dummy Model
+[    5.434637][  T213] mali mali.0: GPU metrics tracepoint support enabled
+[    5.434653][  T213] mali mali.0: Register LUT 00090000 initialized for GPU arch 0x00090008
+[    5.434658][  T213] mali mali.0: GPU identified as 0x1 arch 9.0.8 r0p0 status 0
+[    5.437774][  T213] mali mali.0: _find_key: OPP table not found (-19)
+[    5.440474][    T1] init: processing action (ro.product.brand=Redmi && init) from (/system_ext/etc/init/init.miui.ext.rc:354)
+[    5.440668][  T213] mali mali.0: No OPPs found in device tree! Scaling timeouts using 100000 kHz
+[    5.441056][  T213] mali mali.0: No priority control manager is configured
+[    5.445743][  T213] mali mali.0: Large page allocation set to false after hardware feature check
+[    5.445750][    T1] init: processing action (ro.boot.verifiedbootstate=green && ro.secureboot.devicelock=1 && init) from (/system_ext/etc/init/init.secureboot.rc:2)
+[    5.446955][  T213] mali mali.0: No memory group manager is configured
+[    5.453062][    T1] init: processing action (ro.secureboot.devicelock=1 && init) from (/system_ext/etc/init/init.secureboot.rc:9)
+[    5.460508][  T131] init: Unable to set property 'ro.secureboot.lockstate' from uid:0 gid:0 pid:1: Read-only property was already set
+[    5.461980][  T213] mali mali.0: No clock(s) available for rate tracing
+[    5.471693][  T213] mali mali.0: * MALI kbase_mmap_min_addr compiled to CONFIG_DEFAULT_MMAP_MIN_ADDR, no runtime update possible! *
+[    5.472329][  T213] mali mali.0: Probed as mali0
+[    5.480815][    T1] init: processing action (init) from (/vendor/etc/init/boardid.rc:7)
+
+--- 判据 3：无 Oops / 无 NULL pointer（power_control_init 补丁生效）---
+0
+
+--- 判据 4：/dev/mali0 节点（adb 实测，权限与标签均来自官方 gold 既有规则）---
+crw-rw-rw- 1 system graphics u:object_r:gpu_device:s0  10, 263  /dev/mali0
+
+--- 判据 5：厂商 EGL 初始化错误已消失（对比 gold-15/14 实例）---
+eglInitialize failed 计数 = 48
+no suitable EGLConfig 计数 = 77
+
+############################################################################
+### M1 达成现场（2026-10-10，实例 gold-15/18，补丁 3+4 后）
+############################################################################
+
+--- kbase 身份（= 厂商 DDK 期望的 product_id 0x09000003 / r0p1）---
+[    1.057421][   T12] mali mali.0: GPU identified as 0x3 arch 9.0.0 r0p1 status 0
+[    1.063260][   T12] mali mali.0: Probed as mali0
+
+--- 计数判据（脚本统计，全部应归零；对照 gold-15/17 同判据为 16/16/32/46）---
+is_not_compatible=0
+failed_base_context=0
+eglInitialize_failed=0
+no_suitable_EGLConfig=0
+
+--- UK 版本差仅为 WARN（不阻塞）---
+uk_version_warn=33
+
+############################################################################
+### Phase C 第一步通过现场（2026-10-10，实例 gold-15/21，补丁 5 = virtio connector 改 DSI）
+############################################################################
+
+--- 计数判据（对照 gold-15/19 旧内核同判据）---
+unknow_type=0  （19: 24）
+hwcdisplay_null_deref=0  （19: 24）
+composer_fatal=0  （19: 24）
+egl_failed_regression=0  （应=0）
+mali_probed_regression=1  （应=1）
+kernel_panic=0  （应=0）
+
+--- guest sysfs 实测（adb，DSI 补丁生效 + connector 健康）---
+card0-DSI-1  status=connected  enabled=disabled  modes=1080x2400,...
+
+--- composer HAL 存活与服务注册（对照 19 崩溃循环）---
+[   26.087514][  T215] servicemanager: Caller(pid=596,uid=1000,sid=u:r:hal_graphics_composer_default:s0) Found android.hardware.graphics.composer3.IComposer/def
+01-01 00:00:25.927   596   596 I hwc_shell: HWC3 starting up...
+01-01 00:00:26.486   596   596 I hwcomposer: [HWC] Register hotplug callback(ptr=0x5ad2376240)  
+
+--- run32（补丁 10 v35：去掉 fb_modifiers_not_supported）判据全绿（2026-10-10）---
+### 真根因（run31 -22 订正）
+反汇编 out/tmp/analyze_hwc13.out：DrmModeResource::addFb @0x190850 调 drmModeAddFB2WithModifiers
+（190954 bl drmModeAddFB2WithModifiers@plt；modifier 数组参数=bo+0x60 恒非 NULL，会话哑 buffer 值 0/LINEAR）
+→ libdrm 置 DRM_MODE_FB_MODIFIERS → 内核 drm_internal_framebuffer_create（drm_framebuffer.c:311）
+if (flags & MODIFIERS && fb_modifiers_not_supported) → -EINVAL（与 fourcc 无关）
+virtio 侧声明在 virtgpu_display.c:387（补丁 10 删除）；virtio fb_create=virtio_gpu_user_framebuffer_create
+无任何格式检查（补丁 9 的 drm_any_plane_has_format 假设不成立，格式表保留仅益于 GETPLANE 呈报）
+### run32 实例 gold-15/32 boot.log/dmesg 计数判据
+[ok] 'failed to add fb ret=-22 … hnd:1'（RGB332 会话哑 buffer）消失（run31 每 5s 一条）
+[ok] [DRMDEV] (0:35) 会话哑 buffer 链通过：00:00:26.539 I/hwcomposer(594): [DPY] connected   : 1
+     （run29-31 恒为 0）
+[ok] composer@3.3-service（hwcomposer pid 594）存活不再 abort：dmesg cdh_mtk: CREATE_SESSION 计数=1
+     （run29-31 每次崩溃重启都重开 session，22 次/2 分钟）
+[ok] 'Failed to create display session'/'Failed to create OverlayEngine' 计数 0
+[ok] job 循环运行中（'Handle a job with no visible layer'，官方 dummy model B1 语义）
+[残留-容忍] dim 层 failed to add fb ret=-22 C8 4096x4096 hnd:0xFF79E6ED（PRIME 导入链，仅 1 条/queryPanelsInfo 阶段，不 abort）
+[残留-容忍] failed to enableHWVSync/waitNextVsync: -1、Failed to get presentFence!!（私有 vsync/fence ioctl 未实现，仅打日志）
+### 下一层（新卡点）
+SF RenderEngine 线程 SIGABRT ~5s 循环：Abort message 'output buffer not gpu writeable'
+背架（/data/tombstones/tombstone_10）：RenderEngine::validateOutputBufferUsage ←
+  SkiaRenderEngine::drawLayersInternal ← Cache::primeShaderCache（libsurfaceflinger.so system_ext）
+→ 指向 gralloc（MEOW/mtk）分配链 usage 位处理，待下一轮剥洋葱
