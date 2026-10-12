@@ -6,6 +6,12 @@
   `devices/xiaomi/note13-5G-15/build/doc/vendor-so-identity.md`）
 - 目标（用户已定）：**让厂商图形栈真正跑起来**（非"只在位/被加载"）
 
+> ⛔ **§7 原形态 pass ＋ ✅ 新主线见 §8（用户决策 2026-10-12）**：原"渲染桥在
+> guest 产出像素"（B2 填色 / B3 CPU 光栅）经评估为**全程 CPU 计算**、性价比不成立，
+> **pass**；同日定档新主线 **B′：厂商栈原样生效 + host GPU 渲染**（见 §8），kbase
+> 虚拟 Mali 降级为 **ABI 转发面**复用。§7 文档与证据链保留作历史参考；**后续会话
+> 按 §8 执行**，不要续跑 §7 的 guest 渲染/发布验证（v74 构建已终止）。
+
 ---
 
 ## 0. 结论先行（可行性）
@@ -285,8 +291,8 @@ cmdq-bdg-mailbox.ko          cmdq-sec-drv.ko            mtk_disp_sec.ko
 |---|---|---|---|
 | **M0** 源码与构建就位 | `mali_kbase.ko`(1382472 B) + `cdh_mali_plat.ko`(12800 B) 编出；`vermagic = 6.6.127-4k-cdh …modversions`；`depends` 均为空 | — | ✅ **达成** |
 | **M1** `/dev/mali0` + DDK 初始化成功 | `Probed as mali0`；`/dev/mali0` = `crw-rw-rw- system graphics u:object_r:gpu_device:s0`；`eglInitialize`/`no suitable EGLConfig` 计数 **0**；无 Oops | **L1** | ✅ **达成**（2026-10-10，gold-15/18，补丁 3+4）：身份 = `0x3 arch 9.0.0 r0p1`（product_id `0x09000003`）；四项计数 0/0/0/0（补丁前 16/16/32/46）。UK 版本差仅为 WARN |
-| **M2** SF 稳定 + 引导完成 | `init.svc.surfaceflinger=running` 且不再重启；`sys.boot_completed=1`；`screencap` 能出图 | **L1** | 🟡 **推进中**：Phase C 第一步（补丁 5，connector 改 DSI）已消除 HWC 构造期崩溃，`IComposer/default` 正常存活；剩余阻塞 = 49 个 MTK 私有 CRTC KMS 属性缺失（§7.18） |
-| **M3** 画面正确 | `screencap` 内容与预期一致 | **L2** | 未开始（需 §7.8 B2/B3） |
+| **M2** SF 稳定 + 引导完成 | `init.svc.surfaceflinger=running` 且不再重启；`sys.boot_completed=1`；`screencap` 能出图 | **L1** | ✅ **核心达成**（2026-10-10，run47，补丁 13 + ro.frp.pst 置空）：boot_completed=1、SF pid 恒活、composer 恒活、displayfeature 不再崩；screencap 出图（M3）未达——display 查询 `Failed to get ID for any displays`，另 system_server RenderThread 卡死致 watchdog 循环（不挡 boot，见 §7.27 遗留） |
+| **M3** 画面正确 | `screencap` 内容与预期一致 | **L2** | 未开始（screencap 报 no displays，需 §7.8 B2/B3 + display 查询链） |
 | **M4** GL/VK 应用可跑 | glmark2 或自测 App 正常渲染 | **L3** | 未开始 |
 
 > M1 是当前卡点的直接解：原状是 `eglInitialize` 失败 → `no suitable EGLConfig found, giving up`
@@ -1193,3 +1199,516 @@ hexdump 解读注释（0x209 在 +0x34，非 +0x2C）。
    （pipe/eventfd/memfd）→ 为修复方案定层：内核侧可做的面（若涉及时钟/
    DT 供给）vs DDK 内部问题需绕行的面（硬约束：不改厂商 so 字节）。
 2. guest timekeeping 错乱独立取证（clocksource、DT chosen、QEMU virt 时钟）。
+
+### §7.25 run42：timekeeping 三钟全定案 + mali-cmar 诱因勘正（2026-10-10）
+
+实例 42（重启 41 换新盘，adb 5911 复活）完成 timekeeping 伴生问题闭环，
+并**勘正诱因优先级**。固证全文：`evidence/issue-gold15-vendor-gpu/log-fail.txt`
+run42 段。要点：
+
+| 钟 | 实测（epoch 窗口，dmesg=72s 时刻） | 根因定案 |
+|---|---|---|
+| REALTIME（wall） | epoch+72 → [441s] 跳 2026-08-11 12:34:43 | MIUI SystemClockTime 无 RTC 时 settimeofday 到 ROM build date（ro.build.date.utc=1786451683），每 boot 复现；落后宿主 60 天 |
+| MONOTONIC | 72（=sched_clock=vDSO，三方一致） | 正常 |
+| BOOTTIME（/proc/uptime、进程 starttime、tombstone uptime） | 172872（+恰 172800s） | 注入者静态穷尽未获（无 RTC 驱动/无 suspend/timens 全 0/git 干净/注入 API 无调用者）；btime 恒等式与 uptime 实测矛盾 → 运行 Image≠源码 嫌疑（低优先追查） |
+
+**诱因勘正（关键结论）**：DDK 全量反汇编（581MB）——cmarp_backend_thread
+函数体内**无任何时钟读取**；全库 2337 处 clock_gettime@plt 中 CLOCK_BOOTTIME
+仅 1 处、vDSO 数据页直读 0 处。**时间错乱与 mali-cmar SEGV 的因果链大幅
+削弱**，降级为伴生显示问题（tombstone uptime/elapsedRealtime 偏 +2 天）。
+崩点语义（静态模板指针出现在消息对象 +0x18 槽）**指向初始化顺序/对象
+构造链**，非超时形态。
+
+伴生新登记：pid 720 `vendor.xiaomi.h` SIGSEGV SEGV_MAPERR 空指针（与
+mali-cmar 主线分开，待定位）。
+
+### 下一步（run43 计划）
+
+1. mali-cmar 崩点转向初始化链取证：事件总线生产者（0xb18200 深层）的
+   对象构造 / 4fd 后台线程 spawn 条件 / CMAR 后端启用路径（属性
+   `vendor.mali.cctx_memory_class_cmar_*`）。
+2. 低优先：反汇编 v39 内核产物 uptime_proc_show/getboottime64，分辨
+   BOOTTIME +172800 注入者（Image≠源码 嫌疑）。
+3. 登记遗留：odm HAL 容忍链；hexdump 探针清理时机（见 §7.24 遗留）。
+4. B2 出画（L1 闭环后）。
+
+### §7.26 run43：mali-cmar SEGV 循环闭环——tombstone 定案 + NOP 修复（2026-10-10）
+
+run43 四段取证（a/b/c/d）+ 修复验证完成，run41 起的 L1 头号阻塞（SF
+`mali-cmar-backend` SEGV 5 秒循环）**闭环**。固证全文：
+`evidence/issue-gold15-vendor-gpu/` 的 log-fail.txt（run43 段 + run43-d
+定案段）/ log-pass.txt（run45 段）/ solution.md §5.7。要点：
+
+| 阶段 | 结论 |
+|---|---|
+| run43-a | 属性开关假设排除（`debug.gpu.refs_flush_th` 是刷新阈值非开关） |
+| run43-b | spawn 链定案：eglInitialize→单例→事件总线→34 步状态机→步 33 `pthread_create`，**spawn 无条件** |
+| run43-c | 消息 fd = DDK 内部 pipe@0x1de5c60（创建者 0x1db0c7c）；[P+0x18] 函数指针静态五重排除证明**只能来自运行时数据流**——静态分析达天花板 |
+| run43-d | **tombstone_21 实锤**：x8 = so+0x1cf0470（.text 函数序言），`strb wzr,[x8,#0x101]` 写 so+0x1cf0571 只读页 → SEGV_ACCERR；初始化链把静态模板/类型描述符指针留在 P+0x18 未覆盖为堆实例 |
+
+**修复**：NOP 最小字节补丁（0x1cf2488：`3904051f`→`d503201f`，§5.7 记录
+权衡——环境侧无可控面后的最小绕过，"不改 so 字节"约束的唯一例外，经用户
+确认）。发布链免全量重建：build-vendor → vendor.img 2,363,490,304 B（与
+super vendor_a 分配精确相等）→ `pack-roms.py --patch vendor=...` 增量 dd。
+
+**run45 验证判据（通过）**：
+
+- SF pid 794 单次启动（dmesg 22.86s）恒活 13min+（run43：5 秒必死，467 次/30min）
+- mali-cmar SEGV_ACCERR **0 复现**；eglCreateSync abort 0 / 探针 16 行（stride72 层保持）
+- md5 铁证：guest `/vendor/lib64/egl/libGLES_mali.so` =
+  `53d4b879972c455705b00ce6e7e2606b` = 宿主 patch so，大小/时间戳双吻合
+- 伴生单发自愈（登记）：bootanimation 1×MAPERR（45）、SF 首启 1×SIGBUS（44）
+  ——NOP 后伪指针下游偶发消费
+- **勘误**：`grep boot_completed` 命中 keystore2 监控行≠置位；run45 实际
+  `sys.boot_completed` 未置位
+
+**新卡点登记（下一层，非 mali-cmar 引入；43 同样存在）**：
+
+- zygote ~21s 自杀循环（pid 25049→25847→26670 轮换实证，signal 9 self-kill）
+  → SystemServer 起不全 → boot_completed 不置位
+- vendor.xiaomi.h 持续 SIGSEGV（45: 2881 行 / 43: 5078 行，run42 起登记）
+
+### 下一步（run46 计划）
+
+1. **zygote 自杀循环取证**：logcat 里 zygote/system_server 崩溃前最后栈与
+   abort 消息（`system_server` 卡在哪个服务构造）；与 vendor.xiaomi.h 崩溃
+   链的关系（因果 or 并行）定案 → 这是 boot_completed 的直接阻塞。
+2. vendor.xiaomi.h 空指针 SIGSEGV（run42 登记 pid 720 链）定位：tombstone
+   backtrace + 该 HAL so 反汇编。
+3. hexdump 探针清理时机（§7.24 遗留）；odm HAL 容忍链登记（§7.24 遗留）。
+4. B2 出画（HWC 合成是否真正出画，virtio-gpu/DMS 渲染桥）——boot_completed
+   链清完后推进。
+
+## 7.27 run46：zygote 循环根因 = PDB 30s 超时（frp 分区缺失）→ 置空 ro.frp.pst 修复；新洋葱层 = displayfeature HAL 崩溃循环 → watchdog 杀 system_server（2026-10-10）
+
+### 第一层：PDB init 超时（run45 qemu.log 取证，已修复 ✅）
+
+- zygote 循环真身 = **system_server Java FATAL**（非自杀）：
+  `Failed to boot service com.android.server.pdb.PersistentDataBlockService:
+   onBootPhase threw an exception during phase 500` ←
+  `IllegalStateException: Service PersistentDataBlockService init timeout`
+  （`waitForInitDoneSignal` 30s 超时），每 ~30s 一轮与 zygote 重启周期精确吻合。
+- 根因链：官方 `/vendor/build.prop` 声明 `ro.frp.pst=/dev/block/by-name/frp`
+  → AOSP SystemServer 判据「ro.frp.pst 非空」即启动 PDB（vendor 内无
+  `ro.persistent_data_block`，grep vendor.img = 0 处）→ PDB onStart 三次
+  open `/dev/block/by-name/frp` 全 **ENOENT**（lineage 底包 vda GPT 无 frp
+  分区；fstab 云机化时 frp 行也已剔除）→ init 线程死于
+  `IllegalStateException: persistent partition not readable` →
+  mInitDoneSignal 永不置位 → phase 500 超时。
+- **修复（用户定方向：删 frp 配置而非造分区）**：`build/vendor/build/props.py`
+  新增 `FRP_SETS = {"ro.frp.pst": ""}` 并入 VENDOR_SETS 改写链 → 重跑
+  build-vendor.py（vendor.img 2,363,490,304 B，NOP 补丁 so 随 patch 树保留，
+  md5 1f2003d5@0x1cf2488 验证）→ `pack-roms.py --patch vendor=...` 增量写 vda。
+- run46（实例 46）验证：`PersistentDataBlockService|StartPersistentDataBlock`
+  计数 **0**（PDB 不再启动，只剩 TestHarnessMode 无 PDB 实现的告警日志）、
+  `System zygote died` 计数 **0**、SF/zygote `running`、RenderEngine GL 栈正常。
+
+### 第二层：displayfeature HAL 崩溃循环 → watchdog 杀 system_server（新 L1 阻塞，修桩中）
+
+PDB 修复后 system_server 仍每 ~2-5 分钟被 Watchdog kill（非固定周期）：
+
+```
+Watchdog: *** WATCHDOG KILLING SYSTEM PROCESS: Blocked in monitor
+  com.android.server.am.ActivityManagerService ... for 70s, Blocked in handler
+  on main/display/anim threads ...（三次形态：AMS monitor / WMS monitor / ui 134s）
+→ GOODBYE! → zygote 重启（signal 9 自杀记录，无 Java 异常）
+```
+
+与 **`vendor.displayfeature-hal-1-0` SIGSEGV 5s 崩溃循环**（run42 起登记的
+vendor.xiaomi.h 链，当时误判容忍）时刻吻合——**升级为 L1 阻塞头号嫌疑**。
+
+tombstone_31 反汇编闭环（librhytheyecare.so + libmiXmlParser.so）：
+
+```
+#00 strtol/atoi(NULL)  ← SEGV_MAPERR 0x0
+#02 android::RhyEyeCare::init()+236     (librhytheyecare.so)
+#03 DisplayEffectBase::DisplayEffectBase+3408 (displayfeature.default.so)
+...HIDL passthrough 注册链（服务 main）
+```
+
+- `RhyEyeCare::init` → `MiParseXml::parseXml(idx, tag, buf, out_str, out_uint)`
+  返回 0（"成功"）但 `out_str`（std::string*）未填 → `atoi(sp+0x1180)=atoi(NULL)`。
+- **ParseLine 语义实锤**（libmiXmlParser.so @0x4260）：strtok_r 无 token 时
+  **返回 0 且不写 out**——空 XML 值 = 假成功 + 空指针。
+- 云机崩因：无 `/sys/class/mi_display/disp-DSI-0/panel_info`（xiaomi 私有
+  sysfs）→ `getPanelName` 失败 → panel 专用 XML
+  `vendor/etc/<panel_name>_cn_mi.xml` 打不开（云机 cmdline 无 androidboot.hwc
+  → property_get("ro.boot.hwc",def="CN") → 后缀 `_cn`）→ 只剩 df_default.xml，
+  **其内没有 `<rhyeyecare>` 节**（实测 grep=0；panel XML 里有完整 18 参数）。
+- 真机 = xiaomi mi_display 驱动提供 panel_info（key=value 行，getPanelName
+  按 "=\n" 拆、strncmp "panel_name"、value 空格转 '_'，≤31B）。
+
+### 修复：补丁 13（mi_display 内核桩，ged_stub.c 追加）
+
+- **布局与官方 vendor_file_contexts 正则同构**（标签免补）：
+  `/dev/mi_display/disp_feature` → `vendor_displayfeature_device`；
+  `/sys/devices/virtual/mi_display/disp_feature/disp-DSI-0/*` →
+  `vendor_sysfs_displayfeature`（device_create_with_groups 把 disp-DSI-0 挂在
+  disp_feature 设备下，/sys/class/mi_display/disp-DSI-0 软链同时满足库路径）；
+- `panel_info` = `panel_name=dsi_n17_36_0f_0c_dsc_vdo`（vendor/etc 内 4 个
+  dsi_n17_*_mi.xml 中唯一 cn/gl 双版本并存的全球版主屏，含完整 rhyeyecare 节）；
+- `doze_brightness`=0（rw）、`mipi_rw`/`wp_info` 空（EOF）；disp_feature ioctl
+  一律 -ENOTTY（HAL 应降级；若空指针崩将暴露下一层按栈再补）；
+- 构建链三处配套：wire-kbase.sh heap 补丁 (11) 改**三态幂等**（v2 在/v1 在/
+  原始锚点——原链式锚点在全量卷上不命中硬失败）；recipe v39→**v40-mi-display**
+  （缓存失效）；ged_stub 注释避 -Wcomment（`disp-DSI-0/*` 嵌套注释符）。
+
+### run47 结果（实例 47，2026-10-10 22:14 起）：**L1 达成** ✅
+
+| 判据 | run45 及以前 | run47 | 备注 |
+|---|---|---|---|
+| `sys.boot_completed` | 未置位（PDB/zygote 循环） | **1**（@486.8s，init 正式处理） | **L1 核心判据首次达成** |
+| surfaceflinger | 5s/30s 崩溃循环 | **pid 1301 恒活 running** | |
+| composer@3.3-service | 静态初始化期 SIGSEGV | **pid 581 恒活 running** | |
+| displayfeature-hal-1-0 | **5s SIGSEGV 循环**（run42 起） | **running 不再崩**（signal 11 计数 0） | mi_display 桩生效 |
+| PersistentDataBlockService | init 30s 超时杀 zygote | 不启动（ro.frp.pst 空） | TestHarnessMode 告警无害 |
+| `eglInitialize` 失败 | 历史峰值 32 | 0 | |
+| `System zygote died` | 137+98 次/boot | 0 | |
+| 内核桩 | — | `cdh_mi_display: stub ready`、`/dev/mi_display/disp_feature`（0666）、`panel_info=dsi_n17_36_0f_0c_dsc_vdo` | 实测全就位 |
+
+**M2 状态**：`boot_completed=1` + SF/composer 恒活已达；`screencap` 报
+`Failed to get ID for any displays.`（display 查询链，M3 出画层课题）。
+
+### run47 新登记遗留（不挡 L1，按序排队）
+
+1. **system_server RenderThread 卡死 → watchdog 循环**（~几分钟一轮，已 4 次）：
+   ui 线程 blocked 在 `HardwareRenderer.nSetStopped`（native，等 RenderThread）
+   143s → watchdog kill。疑与 NOP 补丁的 CMAR 伪指针下游消费同源（RenderThread
+   等 fence，CMAR 后台线程消息对象 P+0x18 静态模板指针未覆盖为堆实例）。
+2. **GL 应用 mali-cmar-backend SEGV**（bootanimation×1、iui.miwallpaper×5，
+   fault addr 垃圾值 0x23002700000000/0xa2004a00000000，非 NOP 前的
+   so+0x1cf0571 只读页）——CMAR 伪指针被当对象解引用的下游变体；应用被
+   AMS 拉起循环，不挡 boot。根治方向 = 运行时追 P+0x18 写入者（run43-c
+   静态分析已达天花板）或评估禁用 CMAR 后台线程 spawn 链。
+3. screencap `Failed to get ID for any displays`（M3 出画，L2/L3 课题）。
+4. odm HAL 容忍链（power.stats/secure_element/vibrator 等，§7.24 登记）维持。
+
+## 7.28 run48-53：cmar type=1 消息跳过（SEGV 归零）+ watchdog 死锁根因 = virtio-gpu 无 vblank（补丁 14 调试中，2026-10-10 深夜）
+
+### cmar SEGV 二次迁移 → 定性 → 修复（run48-50，已闭环 ✅）
+
+- run48：0x1cf1dd4 blr→mov w0,wzr 后崩点迁 0x1cf1de4→0x1cf16f4（payload 的
+  +0x20 也垃圾）——**逐消费点 NOP 无尽头**；
+- dispatch 0x1cf1bc0 反汇编定性：消息节点 {+0x10 type, +0x18 payload}，节点
+  有效、**payload 从未被生产者填充**（各进程垃圾值不同）；
+- 修复：0x1cf1bec `b.eq`（type=1 入口）→ 无条件 `b 0x1cf1d94`（default 尾
+  = 原生"不处理直接返回"路径，机器码 54000ea0→0x1400006a）——type=1 消息
+  整体跳过，payload 永不解引用；
+- run50 验证：cmar SEGV **0**（run47/48/49 = 18/8/79 次），boot_completed=1、
+  SF running 保持。生产者 fire-and-forget（pipe 单向），跳过处理无死锁。
+
+### watchdog 死锁根因（run50 ANR trace + 反汇编闭环）
+
+```
+system_server android.ui（持 WindowManagerGlobalLock）
+ → TaskSnapshotController 截屏快照 → captureLayersSync（binder 同步）→ SF 不回
+ ← HWC vsync 线程忙等："failed to waitNextVsync: -1" 每 4ms（qemu.log 刷屏）
+ ← DrmModeResource::waitNextVsync（hwcomposer.so@0x191b54）= 标准 drmWaitVBlank
+ ← 上游 virtio-gpu 无 enable_vblank + 未 drm_vblank_init → 恒 -EOPNOTSUPP
+```
+
+修复 = 补丁 14（wire-kbase.sh）：hrtimer 60Hz 模拟 vblank + drm_vblank_init +
+crtc_funcs 回调（详见 evidence solution.md §8.2）。
+
+### 补丁 14 调试三轮（run51-53，进行中）
+
+| 轮 | recipe | 判据 | 结果 |
+|---|---|---|---|
+| v41 | vblank | waitNextVsync 失败 2820/8min（60Hz 节奏持续） | 未生效 |
+| v42 | vblank-dbg | enable_vblank 打印 0 次 | enable 未被调 |
+| v43 | vblank-dbg2 | **init ok, num_crtcs=1 打印出现**（@0.111s）但 enable 仍 0 次 + vsync 仍 -1 | vblank_init 成功；get 路径短路 |
+| v44 | vblank-dbg3 | drm_vblank.c ioctl 入口打印 type/num_crtcs | 构建中——分辨「ioctl 未到达」vs「type 非法/pipe 越界」 |
+
+已排除：构建链（vda boot_a 字节 == boot.img 实证；cdh_mi_display 打印随
+新内核出现）。下一候选根因：HWC 传的 type 带 HIGH_CRTC pipe bits（MTK 真机
+多 CRTC 语义 vs 云机单 CRTC）→ pipe_index 越界 EINVAL → 修法 = ioctl 层
+改写/多 CRTC 形态模拟。
+
+### 补丁 14 定案（run54-58，v44-v48 六轮）：vblank 死状态 + 自愈修复 ✅
+
+六轮逐层打印（ioctl 入口→pipe 值→get 入口 refcnt→enable 入口）定案链：
+**ioctl 到达（type=0x1 合法、pipe=0、num_crtcs=1）→ drm_vblank_get 进入时
+refcnt 恒=1 且 enabled=false → else 分支 -EINVAL 死循环**（refcount 悬空
++1 泄漏，来源不明：26s 前一次无日志的 +1，console 刷屏或 vendor 状态机）。
+
+**修复（补丁 14f）**：`drm_vblank_get` else 分支死状态自愈——`!enabled` 时
+强制重走 `drm_vblank_enable`（hrtimer start 幂等；成功保留计数，失败才 dec）。
+
+**run58 验证（v48 内核）**：
+- `failed to waitNextVsync` = **0**（v41-v47 时代 1920-2820 次/数分钟）——
+  **vsync 全通**；
+- `enable on crtc` 打印首次出现（60Hz hrtimer 生效）；
+- cmar SEGV 0（保持）、zygote died 0、boot_completed 1、SF running；
+- **watchdog 9 次/boot → 2 次**（间隔 ~4 分钟）：残余栈仍见
+  `ScreenCapture.nativeCaptureLayers`（下一层：HWC SWWatchDog drmdev.cpp:2710
+  10s 超时线程 + KICK_IDLE/presentFence 私有 ioctl 未实现，按洋葱法继续）。
+
+## 7.29 run59-66：watchdog 残余根因三段定案——① 对照实验排除 CMAR；② sfdump 四轮探针锁定 SF 假死；③ crash_dump ptrace 冻结实锤 + 补丁 15 内核自愈（2026-10-11）
+
+### 三段式取证链
+
+**① 排除（run61 对照实验）**：撤销 cmar type=1 跳过后 SF 照样挂（cmar SEGV
+回归 69 次证明撤销生效）→ SF 挂死与 CMAR 跳过无关，恢复跳过补丁。另排除：
+fd 泄漏（FDSize 恒定）、内存压力（MemFree 1.5G/PSI 低）、allocator 服务
+（全空闲）、cgroup freezer（freeze=0）、hung task（SF 挂是 S 态非 D 态；
+`hung_task_timeout_secs` 无 early_param，cmdline 注入无效已勘误）。
+
+**② 自研内核探针 sfdump 四轮迭代（v49-v52，ged_stub.c）**：每 15s 快照
+SF/composer/SS 全线程 (state, 用户态 pc, VMA 归属, 内核栈)，连续 3 次不变
+判冻结 → dump。定案数据：SF/composer 全部线程空闲（epoll/futex/binder_read）
++ **SF binder 线程 455 秒零唤醒**（ctxt_switches 连续采样）——SF 收不到任何
+binder 事务。
+
+**③ 根因定案（run65）**：SF 主线程 `State: t (tracing stop)` +
+`TracerPid=<crash_dump64>`——**MIUIScout 循环触发 debuggerd dump → MIUI
+定制 crash_dump64 读 "guest state" EFAULT（云机无 MTK hypervisor 状态）挂死
+不 detach → SF 主线程+binder 线程永久 ptrace 冻结** → SS→SF 全挂 →
+watchdog kill SS → 循环。
+
+### 补丁 15（sfdump v5 自愈）：watchdog 155→3 次（-98%）
+
+每轮检测 SF/composer 主线程 `TASK_TRACED` → 内核 SIGKILL tracer →
+tracer 死亡自动 detach → SF 复活。限频 60s。run66（20 分钟）：自愈 12 次
+全部解开、watchdog 3 次（原 155 次/33min）、boot_completed=1 稳定、
+zygote died 0。
+
+### 遗留（按序）
+
+1. 自愈限频 60s vs watchdog 65s 窗口的偶发穿透（可降 20s）；
+2. 上游诱因 = AtomicCommit 慢（10s 级）触发 Scout 判挂——根治在 B2 渲染桥
+   （M3）性能或 system_ext 持久禁 scout（属性在 system_ext 968883526 偏移，
+   改动面扩张待定）；
+3. 探针/诊断打印清理时机（稳定性目标达成后）；
+4. M3 出画（screencap no displays）排队。
+
+## 7.30 run67-70：watchdog→整机重启链终局 + 72B atom 布局定案 + ptrace deny（2026-10-11 下午）
+
+### watchdog 链终局定案
+
+```
+GPU job 假完成 / fence 链断（B2 缺失，app 主线程卡 HardwareRenderer.nSetStopped 2.5s+）
+  → SF 合成/响应真慢（binder 65s+ 无响应）
+  → system_server watchdog 全 monitor 阻塞 65-67s
+  → WATCHDOG KILLING SYSTEM PROCESS
+  → "Rebooting system because: nativehang,/system/bin/surfaceflinger"  ← 整机重启机制
+  → guest 自我重启
+```
+
+- crash_dump64 ptrace 冻结 SF（v53 补丁 15 自愈对象）是**放大器不是根因**：
+  run70 ptrace deny（补丁 17）后 SF 无冻结（TracerPid=0、deny 47 次），
+  watchdog 仍 65s 击穿；
+- SF 快照证据：冻结时刻主线程 `epoll_wait`、binder 线程 `binder_thread_read`
+  均空闲——"binder 悬挂"是冻结窗口内 ping（code 1）累积表象；
+- **治本 = B2 渲染桥**（§7.8），watchdog 链随渲染链通畅而根除。
+
+### 72B user atom 布局定案（B2 前置，补丁 16b/16c，§12.4 solution.md；v70 订正）
+
+**72B = v1 `base_jd_atom`（64B，seq_nr 开头）+ 8B 尾部**（非 v2 布局！）：
+
+| 偏移 | 字段 | 证据 |
+|---|---|---|
+| +0x00 | seq_nr（=0） | 全样本 |
+| +0x08 | **jc（job chain GPU VA）** | `0x5effb5d780` 等（SAME_VA）；soft job 时为堆指针 |
+| +0x10/0x18 | udata blob[2] | `0xb4000073…` 等堆指针 |
+| +0x20 | extres_list | 0 或堆指针 |
+| +0x28 | **nr_extres**（JIT_ALLOC 时=分配数） | 0x01 与 jit count 吻合 |
+| +0x30 | **atom_number（序号）** | 0x01 |
+| +0x31 | prio（如 0x03） | — |
+| +0x34 | **core_req** | `0x1` FS / `0x4e` TILER 组合 / `0x209` SOFT_JIT_ALLOC / `0x20a` SOFT_JIT_FREE |
+
+（v70 前 kernel v2 copy 从 +0x00 起解读 → 字段整体错位 8B：jc←seq_nr(0)、
+atom_number←+0x28 nr_extres（GPU job 恒 0）→ **全部 atom 挤爆槽 0/1** →
+path C「慢性碰撞」实为确定性槽位冲突（solution.md §20）；core_req←pre_dep 区
+=0=DEP 秒完成，JIT 分配/真调度路径从未走过。v70 起按 v1 解析，(12c) 拷贝限长
+64B。72B atom 放行后 B2 实现按 raw 72B 取 +0x08/+0x34 与 kernel 解析一致。）
+
+### 补丁清单（本轮新增）
+
+| # | 文件 | 内容 |
+|---|---|---|
+| 15v5.1 | ged_stub.c（built-in） | 自愈限频 60s→5s、轮询 15s→5s |
+| 16b/16c | mali_kbase_jd.c（wire-kbase） | B2-atom 摘要行 + 72B raw hexdump 探针 |
+| 17 | kernel/ptrace.c（wire-kbase，built-in） | 拒绝 crash_dump/debuggerd attach SF/composer/system_server |
+
+### 工程坑（教训）
+
+1. **wire-kbase patch() 幂等失效**：后续补丁改写前序补丁的插入内容 →
+   `new in s` 判据失效 → 重复插入（redefinition）。已加 `done=` 幂等标记；
+2. **ptrace.c 锚点 tab/空格**：grep 显示空格是 tab 渲染假象，锚点须 python repr 核对；
+3. **发布链含 build-boot.py**：built-in 探针（sfdump/ptrace）在 Image，
+   只发 vendor_dlkm 不生效；`--patch boot_a=` 必须随 Image 变更执行；
+4. `--patch super=` 会回滚 super 内 vendor 注入件（run67 教训）——
+   一律用 `--patch vendor=`/`--patch vendor_dlkm=`/`--patch boot_a=` 直写。
+
+### 遗留
+
+1. ~~B2 v1~~ 已落地（16d RT 填色 + 18 scanout 桥，VNC 判据已翻转）；剩余 =
+   **丢唤醒残留**（v70 槽位冲突根除后 SF binder 仍周期性 futex 丢唤醒，
+   solution.md §20.6）→ watchdog 归零 + 真 UI 上屏最终确认；
+2. 探针清理（16b/16c 定案后删，17 保留为稳定性护栏或转可配置）；
+3. watchdog 长观察目标：丢唤醒根除后 `Rebooting because nativehang` 归零。
+
+### atom 滞留 COMPLETED 死锁定案（run79，B2 前置，solution.md §17）
+
+run79 全体提交线程卡 `kbase_jd_submit+0x1480`、atom 全 St=4 的根因
+= **path C 自死锁**：完成事件已投递 event_list 但用户态不取（poll 判据
+revents=1/POLLIN 铁证）→ 槽位不释放 → 提交线程卡 submit → 用户态
+cmar"提交+消费"同线程更不可能取事件，永久自锁。
+
+- **判据方法**：`kbase_poll` 返回 POLLIN ⟺ event_count!=0；必须
+  `pidfd_open`+`pidfd_getfd` 拿同一 struct file 判定（`/proc/<pid>/fd/N`
+  重新 open 会因 setup_state=NEED_VSN 假报 POLLERR）；
+- **干预铁证**：替用户态 read 走 1 个事件（code=16387）→ submit 立即返回、
+  atoms 清空、poll 归零；
+- **对照**：停代取 25s 不复发（一次性自锁事故）；兜底 90s 后
+  boot_completed=1、cmar 转 do_sys_poll 自消费；
+- **内核交付链清白**：work_count 仅 jd.c:1474 inc / :1342 dec，STOPPED
+  早退是死路径，job_fault 无日志——全部静态排除；
+- **B2 v1 靶子**：恢复后 VNC 抓帧 99.3% 纯灰 #888888（GPU 假完成），
+  RT 填纯色后此判据应翻转；
+- **遗留**：死锁初始触发时序未究；内核兜底（submit 超时强制
+  kbase_event_process）作为防复发保险待 B2 过程中按需加。
+
+# 8. 新主线：保厂商栈 + host GPU 渲染（B′，用户定档 2026-10-12）
+
+> **定档（用户 2026-10-12）**：厂商图形栈**原样生效**，像素计算落 **host Apple GPU**，
+> **不消耗 guest CPU**。原 §7 的"渲染桥在 guest 产出像素"（B2 填色 / B3 CPU 光栅）
+> 因全程 CPU 计算性价比不成立而 pass；kbase 虚拟 Mali **降级为 ABI 转发面**（复用）。
+
+## 8.1 结论先行（可行性与成本形态）
+
+- **命令必须翻译，像素可以直达**：host GPU 只认 Metal/Apple ISA，job chain 里的
+  Valhall ISA 机器码必须过翻译器；dma-buf 像素缓冲无语义问题（共享/零拷贝后
+  host 可直接作 Metal 纹理）。FBD 等描述结构是普通数据，可解析。
+- **翻译是按 shader 一次性成本**（估算 10–100ms/shader，含后端 pipeline 编译；
+  UI 场景全局约 50–200 个 shader，全量数秒），**不进每帧热路径**；缓存（内存+磁盘）
+  命中后 ≈0，支持离线预翻译消首编译卡顿。
+- **每帧分工**：guest CPU = 只转发 job chain（KB 级）；host CPU = 录命令（若走
+  virgl 解释层另加 5–15% 单核，见 8.3 取舍）；host GPU = 全部像素计算。渲染结果
+  **host scanout 不回流 guest**（仅 screencap/读回例外）。
+- **"很耗时"的是研发工程量**（Valhall 前端翻译器，研究级），不是运行时。
+- 真机对照：真机上 job chain 的组装（GLSL→Valhall 编译）本来就是 CPU 干的一次性
+  活；我们只是把"执行体"从 Mali GPU 换成 host GPU，录制语义不变。
+
+## 8.2 架构
+
+```
+guest（薄，CPU≈0）                     host（重）
+─────────────────────────             ──────────────────────────────
+SF/App → 厂商 DDK（字节/md5 不动）
+   ↓ open /dev/mali0 + JOB_SUBMIT
+kbase ABI 转发面（复用 run 系列：
+   72B atom / fence / 事件链 / GPU VA）
+   ↓ job chain 零拷贝（共享内存）
+                                      renderer 进程
+                                      ├─ Mali 前端（自研·研究级）
+                                      │   Valhall → NIR/SPIR-V（缓存）
+                                      ├─ 执行后端（成熟件）
+                                      │   MoltenVK→Metal（首选）
+                                      │   virglrenderer（次选）
+                                      ↓
+                                      Apple GPU 执行
+                                      ↓
+                                      host scanout（QEMU 窗口）
+```
+
+## 8.3 选型与取舍
+
+| 项 | 首选 | 次选/备选 | 判定依据 |
+|---|---|---|---|
+| 执行后端 | **MoltenVK（VK→Metal）** | virglrenderer（host GL；macOS GL 已废弃、4.1 封顶，有风险） | macOS 落地成熟度（P0 调查） |
+| 前端输出 | SPIR-V | NIR→Gallium | 与后端配套 |
+| 命令路径 | 前端直出 VK 命令（无解释层） | virgl 协议（每帧解释 +5–15% 单核，估算） | 性能 vs 工程量 |
+| guest↔host 通道 | vhost-user + 共享内存（virtio-gpu blob 零拷贝上屏） | ivshmem + 自定义队列 | P0 调查本 QEMU 版本支持 |
+| shader 缓存 | 内存 + 磁盘持久化 + 离线预翻译 | — | 消首次编译卡顿 |
+
+**对照路线 A（virtio-gpu 替换厂商栈，Mesa/virgl/venus）**：性能成熟（估算为真机
+GPU 的 40–70%）、工程量小一个数量级，但检测面全破（厂商 so 不再被使用）——违反
+"不替换不绕过"硬约束，**仅作性能对照，不做**。B′ 远期上限高于 A（少一层 Gallium
+转换），初期大概率低于 A（翻译器不成熟）。
+
+## 8.4 性能目标（估算）
+
+| 场景 | 目标 | 说明 |
+|---|---|---|
+| UI/合成 | 满帧 60fps | shader 少、fill 主导 |
+| 3D（P4 远期） | 真机 GPU 的 50–85% | 转换层 + 通道开销 |
+| guest CPU | < 5% 单核 | 只做转发/簿记 |
+| shader 全量编译 | UI 全量数秒一次性 | 可预热 + 持久化 |
+
+## 8.5 分阶段（含 go/no-go 门）
+
+| 阶段 | 内容 | 验收门 |
+|---|---|---|
+| **P0 落地调查** | ① macOS 执行后端能力（MoltenVK / virglrenderer / QEMU virgl 现状）② 通道选型（vhost-user-gpu / ivshmem / virtio-gpu blob 在本 QEMU 的支持）③ Valhall 前端资产盘点（panfrost `valhall_dis`/ISA 文档获取渠道；GitHub 不可达，走 gitlab.freedesktop.org）④ 复用盘点（kbase ABI 面、job chain/FBD 逆向） | 调查报告 + 路线 go/no-go |
+| **P1 通道打通** | job chain 转发 + 回传 echo（假渲染）：guest 提交 → host 收到完整 job chain → 内存回写可见 | 链路跑通，延迟/带宽实测 |
+| **P2 前端 MVP** | Valhall fragment 子集 → SPIR-V → MoltenVK，单三角形/纹理出正确像素 | 与参考实现逐像素比对通过 |
+| **P3 UI 负载端到端** | SF/HWUI shader 集合全量，真 UI 上屏 | screencap 正确 UI、60fps、guest CPU < 5% |
+| **P4 扩展** | 3D 子集、缓存持久化/预热、性能优化 | 3D demo 出正确画面 |
+
+## 8.6 复用盘点（§7 资产）
+
+- **kbase ABI 面全复用**：72B atom 布局（§7.30 定案）、fence/事件链、GPU VA 映射、
+  `/dev/mali0` probe、v70–v73 探针体系；
+- **job chain/FBD 布局逆向**（B2 桥的 panfrost 依据）→ P2 前端解析直接用；
+- **v74 job 执行延迟模拟**建议带入转发面（时序保真，防 DDK 状态机竞态）；
+- hangsnap/grab 取证工具链、发布链脚本复用。
+
+## 8.7 风险与回退
+
+| 风险 | 影响 | 缓解/回退 |
+|---|---|---|
+| Valhall 翻译正确性（研究级） | P2 不出正确像素 | 先啃 SF/HWUI 有限 shader 集合；panfrost 资产对照 |
+| macOS 后端能力（virglrenderer GL 4.1；QEMU virgl 缺失） | 后端换型 | 首选 MoltenVK；renderer 自建 vhost-user 后端，不依赖 QEMU virgl |
+| 首次编译卡顿 | 掉帧 | 缓存持久化 + 离线预翻译 |
+| 通道带宽/延迟 | 帧率 | 零拷贝 blob；P1 实测 |
+| 检测面 | 硬约束 | 厂商 so 字节/md5 全程不动（device-checker 双机复验） |
+
+## 8.8 明确不做
+
+- 不做 guest CPU 光栅（B2/B3 老路线，已 pass）；
+- 不替换/不绕过厂商 so（路线 A 不做）；
+- 不做 Mali 命令透传给 host GPU（ISA 鸿沟，物理不可行）。
+
+## 8.9 P0 落地调查结果（2026-10-12，初判 **go**）
+
+**① macOS 执行后端 —— host GPU 栈已存在，风险大降**
+- 本仓 QEMU 为自建 fork（`out/qemu/dist/darwin/bin/qemu-system-aarch64`，
+  v11.0.2-dirty，Cuttlefish 系 host 工具链），构建时 `--enable-opengl
+  --enable-virglrenderer`，`libexec/virgl_render_server` 就位；
+- virglrenderer 基线 1.3.0（ca50e008）+ **21 个云机补丁**（`qemu/patch/virglrenderer/`），
+  全部是 macOS/venus 集成：`macos-vulkan-portability-allocator/instance`、
+  `venus-host-pointer-*`（host 指针/内存直通）、`macos-vulkan-loader-path`、
+  `macos-core-profile-fragment-shaders` 等 → **host GPU 经 Vulkan portability →
+  MoltenVK → Metal 的路径已被本仓打通并打过补丁**；
+- 构建配置 `-Dvenus=true -Dvulkan-dload=true`；Vulkan 运行时随 dist 打包
+  （`qemu/backend/gpu-host-macos/`：libMoltenVK.dylib + libvulkan + ICD），
+  系统 Homebrew 亦装有 molten-vk/vulkan-loader（ICD：
+  `/opt/homebrew/etc/vulkan/icd.d/MoltenVK_icd.json`）。
+- 结论：B′ 的"执行后端（成熟件）"**直接复用本仓 virglrenderer+MoltenVK 栈**，
+  不从零建；MoltenVK 首选 / virglrenderer-GL 次选的取舍按补丁面看应为
+  **venus/MoltenVK 为主路径**。
+
+**② guest↔host 通道 —— 器件面已编入**
+- QEMU `-device help`：`vhost-user-gpu`、`vhost-user-gpu-pci`、
+  `virtio-gpu-gl-device/pci`（virgl）均在；display 后端 = cocoa；
+- `skills/build-qemu/SKILL.md`：linux dist 另带 `libexec/vhost-user-gpu`
+  后端 + `.capabilities.json`（virglrenderer 系 GPU 后端）；
+- **P1 前置确认项**：darwin dist 的 vhost-user-gpu 后端二进制（当前
+  `libexec/` 未见）、virtio-gpu blob/零拷贝在本 fork 的支持面、cocoa 与
+  virtio-gpu-gl 的组合可用性（cocoa 未见 GL 上下文代码，倾向 vhost-user 后端路线）。
+
+**③ Valhall 前端资产 —— 渠道可达**
+- Mesa 源码走 `gitlab.freedesktop.org/mesa/mesa`（GitHub 不可达不阻塞，与 §7.3 一致）；
+- `src/panfrost/`：`compiler/`（Bifrost+ shader 编译器，含 Valhall `pan/va`、
+  `bi`）、`lib/`（job chain/command stream 数据结构——FBD/job 布局的权威参照）、
+  反汇编器（`valhall_dis`/`bi_` 系）；docs.mesa3d.org 明示 panfrost 覆盖
+  Midgard/Bifrost/**Valhall**；
+- 结论：翻译器的"语义参照系"开源可得，P2 的实现路线 = 参照 pan/va + bi
+  语义建 Valhall→SPIR-V 前端。
+
+**④ 复用盘点**：见 §8.6（kbase ABI 面、job chain/FBD 逆向、探针/取证工具链）。
+
+**Go/No-Go**：**go**。落地不确定性大头从"host 后端是否存在"（已存在，本仓
+自建且打满 macOS 补丁）转移到"Valhall 前端正确性"（研究级，符合预估）。下一步 P1：
+通道打通（job chain 转发 echo），含上述 3 项前置确认。

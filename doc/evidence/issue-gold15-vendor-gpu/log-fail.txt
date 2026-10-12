@@ -297,3 +297,578 @@ read(fd=[x19+0],  buf=sp+0x30, min(n,8)*24)          ← 24 字节事件条目�
 → 下一步：重启实例恢复 adb → /proc/<sf>/fd + tombstone 复取 → 定 fd1
   真身 → 依「DDK 内部时序/初始化」方向定修复方案（内核侧能做的面 +
   需绕开的面）。
+
+---
+
+## run42（实例 42，2026-10-10）——timekeeping 三钟全定案 + 诱因假设勘正
+
+背景：run41 段五登记的 timekeeping 伴生问题，本轮在实例 42（重启实例 41
+换新盘）完成取证闭环。**结论先行**：三钟语义全部定案；「时间错乱 →
+mali-cmar SEGV」因果链大幅削弱（不再是头号诱因）。
+
+### 一、wall clock 停在 2026-08-11 的根因定案：MIUI SystemClockTime
+
+qemu.log（串口 logcat）时间戳从 `01-01 00:07:21`（epoch）跳到
+`08-11 12:34:43` 的跳变点（qemu.log L247805-247825）：
+
+```
+01-01 00:07:21.125 18581 18581 I SystemClockTime: Current time only 441125, advancing to build time 1786451683000
+01-01 00:07:21.125 18581 18581 D SystemClockTime: Setting time of day to sec=1786451683
+08-11 12:34:43.000 18581 18581 E SystemClockTime: Unable to open /dev/rtc0: No such file or directory
+08-11 12:34:43.000 18581 18581 W SystemClockTime: Unable to set rtc to 1786451683: No such file or dire
+```
+
+- **MIUI SystemClockTime 服务**（system_server 内）发现 wall clock <
+  阈值时，**settimeofday 推进到 ROM build date（1786451683 =
+  ro.build.date.utc，2026-08-11 12:34:43 UTC）**——guest 无 RTC（见三），
+  无 NTP/NITZ，时间就停在 ROM 构建日，落后宿主 60 天。
+- 试图同步 /dev/rtc0 失败（节点不存在）。每 boot 复现（run41/42 双证）。
+- settimeofday 发生在 dmesg [441.125]（logcat 双时间戳互证：跳变前
+  logcat=epoch+441.125=跳变锚点，跳变后=1786451683+ms）。
+
+### 二、/proc/uptime +172800 的注入者追查（静态全排除）
+
+boot 早期（SystemClockTime 跳变前、REALTIME 仍 epoch）三钟联读
+（实例 42，dmesg=72s 时刻，adb 单命令内连读）：
+
+```
+/proc/uptime  = 172872.02        ← BOOTTIME：多 172800（恰 2 整天）
+/proc/stat    = btime 0          ← getboottime64 口径：epoch（正常）
+date +%s      = 72               ← vDSO REALTIME：epoch+72（正常）
+dmesg 尾      = 72.053           ← sched_clock（正常）
+logcat        = 01-01 00:00:0X   ← REALTIME（正常）
+```
+
+- **增速 1:1**（run41 两点差值 292s vs 时差 292s）→ 纯 offset 非速率错。
+- **排除项（全部实证）**：
+  1. 无 RTC 驱动（/sys/class/rtc 空、/proc/driver/rtc 无输出、dmesg 无
+     rtc/pl031/goldfish 行；arch_timer=24MHz virt 唯一 clocksource）；
+  2. 无 suspend 流程（qemu.log grep "PM: suspend|Freezing" 计数 0；
+     dmesg ring 同查空）；
+  3. 无 time namespace 偏移（/proc/{self,1,SF}/timens_offsets 全
+     「monotonic 0 0 / boottime 0 0」）；
+  4. 内核源码静态穷尽：offs_boot 唯一写点 tk_update_sleep_time（静态
+     inline）→ 仅 __timekeeping_inject_sleeptime 两调用者
+     （timekeeping_resume / timeking_inject_sleeptime64-EXPORT）；后者
+     全树调用仅 rtc/class.c:191（无 rtc 设备不执行）；insmod 模块清单
+     （cdh_*/mali_kbase/wifi 模拟器/virtio_console）源码 grep 无调用；
+  5. git diff 上游基点（android15-6.6.127_r00 merge）kernel/time 与
+     fs/proc 干净（仅 task_mmu.c CDH 屏蔽改动）；
+  6. guest daemon（Rust core/guest/daemon/rust）仅 setns(CLONE_NEWNET)，
+     无 unshare(NEWTIME)。
+- **数学死锁与遗留疑点**：epoch 窗口实测 btime=0 与 uptime=MONOTONIC+
+  172800 无法同源于一致 tk（btime 恒等式 = offs_real - offs_boot 与
+  uptime = MONOTONIC + offs_boot、date = MONOTONIC + offs_real 三式联立
+  矛盾）→ **运行 Image 与源码不一致（或运行时内存写）嫌疑**，v39-jd-
+  stride72 产物待反汇编 uptime_proc_show/getboottime64 分辨（未做，
+  边际价值低见四）。
+- /proc/uptime 异常影响面：所有 elapsedRealtime/进程 starttime/tombstone
+  uptime 显示 +172800（SF tombstone uptime=172801 即 fork 后 elapsed+
+  172800）。
+
+### 三、QEMU/固件面时钟配置（非注入源，记录备查）
+
+- QEMU cmdline：`-machine virt -rtc base=localtime`（RTC 基准=宿主
+  本地时间，但 guest 内核无驱动读它）；efi-vars.fd 每实例从
+  dist/darwin/firmware 复制（mtime 与注入无关，dist 文件 10-09 生成）。
+- 内核 timekeeping_init 走弱实现（read_persistent_clock64={0,0}，
+  arm64 无 read_persistent_wall_and_boot_offset override，仅 s390 有）
+  → REALTIME 从 epoch 起步（logcat 01-01 00:00:11 起步实证）。
+
+### 四、诱因勘正：时间错乱 → mali-cmar 因果链大幅削弱
+
+- /tmp/mali_disas.txt（581MB 全量反汇编）：
+  - **cmarp_backend_thread（0x1cf2170）函数体内无任何 clock_gettime**；
+  - 全库 clock_gettime@plt 调用 2337 处，其中 CLOCK_BOOTTIME(clockid=7)
+    **仅 1 处**；tpidrro_el0（vDSO 数据页直读）0 处、syscall 113
+    直构造 0 处 → DDK 时钟依赖以 CLOCK_MONOTONIC 为主（正常组）。
+- 崩点语义（run41 已精解：消息对象+0x18 槽取静态模板 so+0x1F0470 →
+  写只读段 SEGV）**非超时形态，指向初始化顺序/对象构造问题**。
+- **勘正 run41 段五「可能是本卡点诱因之一」的推测**：时间错乱不再列为
+  头号诱因，降级为伴生显示问题。
+
+### 五、run42 现场与伴生登记
+
+- 实例 42（新盘，同 vda/data 镜像）：SystemClockTime @dmesg[406.857]
+  跳变复现（Current time only 406857 → build time 1786451683000）；
+  Fatal signal 计数 224（含新类型：pid 720 `vendor.xiaomi.h` SIGSEGV
+  SEGV_MAPERR fault addr 0x0 空指针——vendor.xiaomi.hardware 服务，
+  待后续定位，与 mali-cmar 主线分开登记）。
+- mali-cmar SEGV 循环在实例 42 照旧复现。
+
+### 证据文件
+
+- 实例 41 双 boot 串口：`log-run40-41-malicmar-capture.txt`（147MB）；
+- 实例 42 串口：out/core/daemon/runtime/gold-15/42/qemu.log（本段
+  L4649/L7025 Fatal、L226632-226633 SystemClockTime、L92-296 时钟源
+  初始化）；
+- 三钟联读/timens/uptime 增速等 adb 命令输出见本段引文。
+
+→ 下一步（run43 计划）：a) 反汇编 v39 内核产物 uptime_proc_show/
+  getboottime64 分辨 Image≠源码 嫌疑（低优先）；b) mali-cmar 崩点转向
+  初始化链：事件总线生产者（0xb18200 深层）对象构造 / 4fd 后台线程
+  spawn 条件；c) odm HAL 容忍链登记；d) B2 出画（需 L1 先闭环）。
+
+---
+
+## run43 初始化链取证（进行中，未闭环；实例 42，2026-10-10 下午）
+
+### 1. 属性开关假设正式排除（run43-a 关闭）
+
+- 34 步初始化函数内仅一处 `__system_property_get`，属性名 =
+  `debug.gpu.refs_flush_th`（so 偏移 0x1186ac 字符串，\0 结尾确认），
+  `atoi` 后存对象 +0x15be0 处——是**引用刷新阈值**，与 CMAR 后端启用
+  无关。
+- `cctx_memory_class_cmar_*` 确认为 perfetto 数据源 C++ 函数名（非属性），
+  run41 段的属性假设登记勘误。
+
+### 2. spawn 链全貌定案（run43-b）
+
+```
+eglInitialize+0x16c (0xad2bc4, flags=3, w1=-1)          ┐
+单例获取 0xb40d3c (flags=3, w1=-1，pthread_once 风格)     ├→ 0xb407d0 大函数
+事件总线注册 0xb1d780 (flags=2, w1=类型数组元素)          ┘ (calloc(1, 88824) → CMAR 总对象 x19)
+   ↓
+0xb407d0 内：__system_property_get(debug.gpu.refs_flush_th) + 5 个前置检查链
+   0x1de2930 → 0xb40ec0 → 0x1cf2a80(分配[x19+0x4c78]子对象) → 0x1cf2bf0
+   → 0x1ce8370 → 0x1dd88f0 → 0x1cedd60 ★
+   ↓
+0x1cedd60 = 34 步状态机初始化（switch(w1) 跳表步进 +1，全库唯一引用线程函数）：
+  - 步 1..32：9×0x1dd93d0(通道桥建立)、3×eventfd([x19+0x654/0x658/0x65c])、
+    12+对 0x1dd9580+0x1f52610(子对象/通道注册)、sem_init×2、malloc、
+    mutex_init×3([x19+0x50/0x70c/0x740/0x6a8 区域)、sysconf(_SC_PAGESIZE)
+  - 步 33 (0x1cee748)：pthread_create(cmarp_backend_thread=0x1cf2170, arg=x19)
+  - 任一步失败 → bl 0x1cee800(w1=步骤号) 回滚清理 → 返回 0
+  - 全成功返回 1；调用者把返回对象包装成带 vtable 的事件对象注册进总线
+```
+
+**结论**：spawn 基本无条件（flags=2/3 均走启用链，`tst w20,#0x7fffffff`），
+SEGV 发生在线程内部早期（入口+0x2E4），非 spawn 条件问题。
+
+### 3. 崩点地址对齐修正（关键勘误）
+
+- 实例 42 串口 Fatal（L881613/L884096）：`SEGV_ACCERR, fault addr 0x716af05571
+  / 0x7546cfd571`——**写权限错**（非 MAPERR），地址有效映射但只读。
+- fault_addr − 0x101 = so_base + 0x1F0470 → **P2 = [P+0x18] = so+0x1F0470**
+  （此前误记为 P=so+0x1F0470；实际 P=消息+0x10，P2 才是只读目标）。
+- so+0x1F0470 落在第一 PT_LOAD（R--，0x0-0x958484）即 .rodata 区；该偏移
+  文件内容为非指针型 const 数据。**P 的 +0x18 实例槽仍是静态默认值，未被
+  构造链回填为堆实例** —— "对象初始化顺序/构造链"假说的具体形态。
+
+### 4. 线程与消息系统语义（cmarp_backend_thread = 0x1cf2170）
+
+```
+prctl(PR_SET_NAME) → poll 4 fd {[x19]=消息fd, [x19+0x654/0x658/0x65c]=3×eventfd}
+主循环：
+  消息fd 可读 → 0x1de4b10 = __read_chk(fd=[x19], buf, count*24)
+    （24B/条消息：[+0]flags [+8]payload [+0x10]P；返回读取条数）
+  逐条过滤 flags&0x1800：==0x1800 跳过、==0x1000 跳过、非零跳过、
+    **仅 flags==0 走崩溃路径**：
+      x8=[msg+0x10](P, 判空) → x8=[P+0x18](P2, 无判空) →
+      strb wzr, [P2+0x101] ← 写只读 .rodata → SEGV_ACCERR
+  [x19+0x6d0] = 可读条数提示（poll 前查询，min(count,8) 批量读）
+```
+
+- 消息为 **fd 流**（非内存队列）→ fd 是 socketpair/管道可能性大（消息含
+  用户态指针 P，内核不可能提供 → 生产者在用户态）。
+- **[x19]（消息 fd）的创建/写入者尚未定位**（34 步内无 pipe/socketpair
+  PLT 调用；case 1 的 0x1dd93d0 建立的是堆通道对象 [x19+0x80/0x88]）。
+
+### 5. 待查清单（run43 继续）
+
+- a) [x19+0] 消息 fd 写入者：查 0x1cf2a80（[x19+0x4c78] 子对象分配者）、
+  事件总线生产者函数（0xb1d7xx 所在函数入口）、0x1dd93d0 内部
+  0x1dde9e0/0x1ddcac0 是否间接写 [x19]。
+- b) 0x1dd9580 是否回填注册表条目 [+0x18]（构造链与消息竞态验证）。
+- c) so+0x1F0470 所在 section 身份（readelf -S 定位；附近 const 描述符表）。
+- d) guest tombstone 取 backtrace（adb 5911 已 offline，需 StopCommand 杀
+  job + `just device run 2` 重启实例后取 /data/tombstones 最新）。
+- e) 修复方向候选：消息生产者禁用（环境侧）/ 注册表槽回填时机（不可改
+  so 字节，只能内核/环境侧入手）。
+
+### 证据文件
+
+- /tmp/mali_disas.txt（581MB 全量反汇编，spawn 点 L5100818、34 步函数
+  L5100184-5100862、线程 L5104492-5104700、取消息函数 L5351005、
+  调用者 L490282/L378087/L454570/L490525）。
+- 实例 42 串口 qemu.log L881613/L884096（fault addr 双样本）。
+- so 提取源：devices/xiaomi/gold-15/out/tmp/libGLES_mali.so。
+
+############################################################################
+### run43-c 静态取证定案（2026-10-10，待查清单 a/b/c 全部收敛）
+############################################################################
+
+**a) 消息 fd 创建者 = pipe()（0x1de5d58，全库唯一 pipe@plt 调用）**
+
+- 创建函数 0x1de5c60 = 「分配器上下文」构造（L5352060 起）：
+  - calloc(1,72) → 对象 x19；ioctl([x21 设备fd], 0xC0088033, sp)（查询/分配）
+  - malloc(count*item_size)、memset 0
+  - **pipe([x19+0x20])** → [x19+0x20]=读端、[x19+0x28]=写端（L5352151）
+  - adr x8, 0x1de5de0 → [x19+0x40] 存函数指针表；[x19+0x30] 拷 16B 描述符
+  - 默认描述符 .rodata 0x3e2c48（u16 count + 16B 内容）
+  - 输出对象指针到调用者 x24。
+- **唯一调用者 0x1db0c7c**（L5298307）——消息管道随分配器上下文建立，
+  写端由生产者持有 → 生产者在同进程用户态，与 §4 判断一致。
+- socket@plt 全库仅 1 处（0x1d707d4，非本链）；0x1dde9e0 **排除** fd 创建
+  （实为哈希监听条目注册：malloc(400)、[桶头+0x18] 为 intrusive 链表 next、
+  尾部 sem_post([父+0x208]) 唤醒 backend —— **事件生产路径与注册路径同源**）。
+
+**b) 0x1dd9580 = 注册表取条目封装（排除回填嫌疑）**
+
+- 形态：mutex_lock(x0+8) → 0x1ddcb30(表=x0+0x30, w1=0x21=类型33, &slot)。
+- 0x1ddcb30（L5342925）为「内存池注册表分配」：位图找空闲 slot →
+  条目 [+0x10] 基址、[+0x18] 父表指针、**输出句柄 = base + (slot<<shift)**
+  （非裸指针）；伴随 w2=33 的删除函数 0x1ddcd80。
+- 对应 crash 线程「+0x18 槽」假说的警示：库内 +0x18 字段有三种语义
+  （父表指针 / intrusive next / 崩点 P2 槽），不能只凭偏移对号。
+
+**c) so+0x1F0470 身份 = .rodata 二进制数据，且其值不可能由 so 静态机制产生**
+
+- section 定位（pyelftools）：`.rodata` addr 0x2F490(193568) size 5948348，
+  0x1F0470 落在其中；0x1F0400-0x1F0600 hexdump 无字符串特征（疑似数据表/微码）。
+- **五重排除**（值 so+0x1F0470 的静态来源全部为零）：
+  1. RELA(.rela.dyn) r_offset 0x1F0000-0x1F2000 = 0 条
+  2. RELA addend 指向 0x1F0xxx = 0 条
+  3. RELR(.relr.dyn) 该页 = 0 条（共 3307 条中无一）
+  4. adrp 0x1f0000 全库 = 0 次；adr 直接引用 = 0 次
+  5. u32 常量 0x001F0470/0x001F0458（LE 字节序列）全文件 = 0 处
+- 推论：**[P+0x18]=so+0x1F0470 只能来自运行时数据流写入**（消息生产者侧
+  拷贝/传播），静态分析到此为天花板；需要 tombstone 动态现场（x19 值、
+  msg 缓冲内容、P 实际值）终结。
+- so 基址复核：fault 0x716af05571 − 0x1F0571 = **0x716AD15000**（tombstone
+  换算链自洽）。
+
+**spawn 链参数修正**（0xb1d780 调用点上下文，L454570）：
+
+- 三调用点实为 0xb407d0(w0=类型枚举, w1=子类型) 的按类型单例获取：
+  eglInitialize+0x16c(0xad2bc4, w0=3)、单例获取(0xb40d3c, w0=3)、
+  事件总线注册(0xb1d780, w0=2, w1=[类型数组[x20]]，循环遍历 65 项能力表)。
+- 0xb407d0 内部 calloc(1,88824) → CMAR 对象，spawn 无条件结论不变。
+
+**run43 下一步（run43-d）**：重启实例（StopCommand 杀旧 job →
+`just device run 2`）→ adb 127.0.0.1:5911 取 /data/tombstones 最新
+mali-cmar tombstone → 读寄存器现场（x19/msg缓冲/P 值）→ 结合 pipe 写端
+（[x19+0x28]）定位生产者写入点 → 定修复方案（内核/环境侧，不改 so 字节）。
+
+############################################################################
+### run43-d 动态现场定案（2026-10-10，实例 43：run43-c 勘误 + P 值实锤）
+############################################################################
+
+**实例**：43（杀旧 job 16470 → `just device run 2`，console 5910/adb 5911）。
+displayfeature 空指针崩循环与 mali-cmar 循环并发复现（tombstone 槽 23-27
+全被 displayfeature 占，mali-cmar 现场从 logcat -b crash 取得，
+out/tmp/crash43.txt 3403 行）。
+
+**重大勘误（run42 偏移换算错误）**：第一次 mali-cmar 崩（00:00:26.114，
+SF pid 797/tid 836，DEBUG 报告 L109-123）：
+
+- pc = 0x75c5f63488 → backtrace #00 = so+0x1cf2488（strb 崩点）→
+  **so_base = 0x75C5C71000**（run42 用的基址偏小 0x100000）。
+- fault 0x75c5f61571 − so_base = **0x2F0571** → **P2 = so+0x2F0470
+  （非 0x1F0470）**。第二次崩（00:00:30.990）fault 0x6e53102571 同构
+  验证（Δ=0x2F0571）✓。run43-c 的五重排除需按新偏移重读（见下）。
+
+**寄存器现场（第一次崩）**：
+
+```
+x0  = x19 = b4000078a14a4400   ← CMAR 主对象（MTE tag b4）
+x9  = b4000077262d20d0          ← 消息的 P 字段 = 堆对象（tagged）
+x8  = 0x75c5f61470 = so+0x2F0470 ← [P+0x18]（崩点写目标）
+x29 = 0x1800                    ← 过滤掩码常量（flags&0x1800==0 走此路径）
+x25 = x19+0x660、x28 = x19+0x3E04、x23 = sp+0x30（消息缓冲）、
+x26 = sp+0x110（工作缓冲）、lr = so+0x1F3414、3 frames（线程私有栈）
+```
+
+**崩点窗口指令（0x1cf2460-0x1cf248c）确认消息布局**：
+`ldr q0,[x23]`（消息前 16B）→ `str q0,[x26]` → **`str x9,[x26,#0x10]`
+（P 存工作缓冲）** → `ldr x8,[x8,#0x18]` → `stp x8,x26,[x22,#0xd0]`
+→ `strb wzr,[x8,#0x101]` ← 崩。
+
+**P2 = so+0x2F0470 身份（正确偏移重查）**：
+
+- 位于 **728 项 × 16B 定长表**，表头 **0x2EF770**，表尾 0x2F24F0；
+  P2 = 第 208 项。项格式 `{u32 tag=0x002b0002, u32 len=0x1f(31),
+  u32 val(变化), u32 flags=2}`（如 P2 项 val=0xdc=220）。
+- 表区静态引用**依然全零**（按新偏移重做）：adrp 0x2ef0000/0x2f0000
+  两页 0 次；MOV 立即数字面 0x2f0470/0x2ef770/0x2f0458 0 次；
+  u32/u64 常量 0 处；RELA r_offset/addend 0x2EE000-0x2F3000 0 条；
+  RELR（标准算法）该区 0 条——**但 .relr.dyn word0=0x3170000 bit0=0
+  与标准 RELR entry 格式（|1）矛盾，RELR 解析正确性存疑，未定案**。
+- 推论修正：[P+0x18]=表项指针 极可能是**构造链某步写入的「类型描述符/
+  静态元数据」指针**（合法中间态），后续步骤应覆盖为堆实例；或生产者
+  构造 P 时的初始槽位。需定位写入者（表指针经间接传播，非直接寻址）。
+
+**pipe 上下文构造链（上游）**：0x1db0c40 函数（L5298200 起）→
+bl 0x1de5c60（分配器 ctx：72B 对象 + ioctl 0xC0088033 + pipe 到
+[ctx+0x20]/[ctx+0x28]）→ `_Znwm@plt`（C++ new）→ 挂入对象 [+0x30]。
+下一步：追 0x1db0c40 完整函数体（谁持有 ctx）→ 找 write 到
+[ctx+0x28] 的生产者 → 追 [P+0x18] 写入者。
+
+**run43-d 待续**：① 0x1db0c40 函数全貌与 ctx 挂载点；② write@plt
+调用点中持 [ctx+0x28] 者（消息生产者）；③ P 堆对象构造点（b4000077262d20d0
+形态）与 +0x18 槽写入指令；④ RELR word0 格式核验（bionic linker 源码
+对照）排除静态表指针遗漏；⑤ 修复方案设计（不改 so 字节）。
+
+### run43-d tombstone 定案 + NOP 修复闭环（2026-10-10，实例 43 取证 / 44-45 验证）
+
+**tombstone_21 实锤**（实例 43 adb 5911 拉取，/data/tombstones/tombstone_21，
+全量存 out/tmp/crash43.txt）——补齐 run43-c 静态分析够不到的寄存器现场：
+
+- 崩溃进程/线程：`/system/bin/surfaceflinger` pid 31289，`mali-cmar-backend` tid 31371
+- 崩溃点：`pc = so_base + 0x1cf2488`（so_base = 0x7161e32000），指令
+  `strb wzr, [x8, #0x101]`，机器码 3904051f
+- 寄存器现场：`x8 = 0x7163b22470 = so_base + 0x1cf0470`——**.text 段内函数
+  序言地址**（非堆对象）；故障地址 `0x7163b22571 = x8 + 0x101 =
+  so_base + 0x1cf0571`；SIGSEGV code 2（SEGV_ACCERR，写只读页）
+- 消息消费链（与反汇编完全对齐）：消息 +0x10 → P 指针；`[P+0x18]` → x8
+  （函数指针 0x1cf0470）；`stp x8,x26,[x22,#0xd0]` 存下伪对象后，
+  `strb wzr,[x8,#0x101]` 把函数地址 +0x101 当对象字节清零 → 写 .text 必崩
+- 结论定案：run43-a/b/c 静态五重排除正确——[P+0x18] 的函数指针来自
+  运行时数据流（初始化链把静态模板/类型描述符指针留在 P+0x18 未被
+  覆盖），后续消费路径把它当堆实例写 +0x101。每 SF 进程起 1 秒内
+  首条消息即触发，init 5 秒重启 → 467 次/30min 循环（43 实测）。
+
+**修复落地（不改厂商语义的最小 NOP 绕过，权衡后执行）**：
+
+- run43-c 原目标「内核/环境侧修复、不改 so 字节」，但生产者写入点
+  （P+0x18 的函数指针来源）静态穷尽已达天花板，环境侧无对应可控面；
+  采用最小字节补丁：0x1cf2488 处 4 字节 `3904051f` → `d503201f`（NOP），
+  仅绕过该次清零写入，其余消息处理路径（含 stp 存伪指针）原样保留。
+- 注入：`build/vendor/patch/lib64/egl/libGLES_mali.so`（53,566,640 B 不变）
+  + baselines `vendor.selinux-labels` 登记键 `lib64/egl/libGLES_mali.so` →
+  `u:object_r:same_process_hal_file:s0`（官方原标签，debugfs ea_get 从
+  旧 vendor.img 读回；**教训：注入树相对路径即镜像内 /vendor 路径**，
+  首次放 patch/vendor/lib64/... 会错落 /vendor/vendor/ 且被 baselines
+  缺键校验拦截）。
+- 发布链（免全量重建）：build-vendor.py 重建 vendor.img（2,363,490,304 B，
+  与 super vendor_a 分配精确相等）→ `pack-roms.py --patch
+  vendor=out/dist/rom/vendor.img` 增量 dd 进 vda.img @5333057536
+  （只写 2.2GB，免 9GB super / 13GB vda 重建，GPT/liblp 校验和不受影响）。
+
+**验证过程受扰记录（工程环境教训）**：
+
+1. 后台任务方式启动的 `device-main run`（daemon 前台驻留）会被任务
+   清理机制 SIGTERM，daemon 转发信号给 QEMU 进程组（run.go startQEMU
+   的 signal.Notify）→ 实例 44 由此夭折；验证实例须 nohup detach 启动。
+2. 并行调试的 findx9-16 实例（Web 控制台启动）占用共享端口池槽位 0
+   （5910/5911/15600），gold-15 实例 45 首启时 fastboot 15600 绑定失败
+   （QEMU exit 1）；以 port-slot 文件指定槽位 1（5918/5919/15608）解决。
+   端口池全局共享但槽位占用判断不跨设备，CLI 与 Web 双入口并行操作
+   会互相干扰（webStopInstance 亦可终止 CLI 实例）。
+3. `grep -c boot_completed` 命中 keystore2 的「monitoring for
+   sys.boot_completed=1」**监控行**≠置位成功；置位判据必须 adb
+   `getprop sys.boot_completed` 实测（run45 勘误：实际未置位）。
+
+**伴生新形态登记（NOP 下游伪指针，均单发自愈）**：
+
+- 实例 44：SF 首启（pid 798）mali-cmar 1× SIGBUS BUS_ADRALN
+  `0x100000100030d`（bootanimation 退出窗口），重启后 SF pid 1346 稳定存活。
+- 实例 45：bootanimation（pid 862）mali-cmar 1× SIGSEGV MAPERR
+  `0x23002700000000`（boot 后 25s），init 重启动画服务后正常结束。
+- 语义：NOP 绕过首写入点后，[x22+0xd0] 伪对象指针仍在下游个别路径被
+  消费，触发点从「SF 必现 5 秒循环」降级为「boot 早期单发自愈」，形态
+  随消费路径漂移（BUS_ADRALN/MAPERR）。
+
+**遗留（非本次引入，43 同样存在）**：zygote ~21s 自杀循环（pid 轮换
+25049→25847→26670，boot_completed 因此不置位）+ vendor.xiaomi.h 持续
+SIGSEGV（45 计数 2881，43 计数 5078）——下一层卡点，与 mali-cmar 主线分开。
+
+===================== run46/47 取证（2026-10-10，L1 达成前的失败现场）=====================
+注：实例 45/46 目录已随 daemon 清理，以下现场摘自分析时实时提取（原文行号见 gpu.md §7.27 / solution.md §7）；实例 47 现场为本文件直接摘录。
+
+--- [失败现场 1] run45：zygote ~30s 循环根因 = PDB init 30s 超时（实例45 qemu.log，L15454-L15560 实时摘录）---
+08-11 12:34:43.168   978   978 I SystemServiceManager: Starting com.android.server.pdb.PersistentDataBlockService
+08-11 12:34:43.168   978  1130 D SystemServerTimingAsync: InitThreadPoolExec:PersistentDataBlockService.onStart
+08-11 12:34:43.170   978  1130 E PersistentDataBlockService: partition not available?
+08-11 12:34:43.170   978  1130 E PersistentDataBlockService: java.io.FileNotFoundException: /dev/block/by-name/frp: open failed: ENOENT (No such file or directory)
+08-11 12:34:43.170   978  1130 I PersistentDataBlockService: Formatting FRP partition...
+08-11 12:34:43.170   978  1130 E PersistentDataBlockService: failed to format block
+08-11 12:34:43.170   978  1130 E SystemServerInitThreadPool: Failure in PersistentDataBlockService.onStart: java.lang.IllegalStateException: persistent partition not readable
+08-11 12:34:43.170   978  1130 E SystemServerInitThreadPool: Caused by: java.io.FileNotFoundException: /dev/block/by-name/frp: open failed: ENOENT
+...（30s 后主线程）
+08-11 12:35:10.790   978   978 E Zygote  : System zygote died with fatal exception
+08-11 12:35:10.790   978   978 E Zygote  : java.lang.RuntimeException: Failed to boot service com.android.server.pdb.PersistentDataBlockService: onBootPhase threw an exception during phase 500
+08-11 12:35:10.790   978   978 E Zygote  : Caused by: java.lang.IllegalStateException: Service PersistentDataBlockService init timeout
+08-11 12:35:10.790   978   978 E Zygote  :        at com.android.server.pdb.PersistentDataBlockService.waitForInitDoneSignal(PersistentDataBlockService.java:425)
+08-11 12:35:10.796   978   978 I am_crash: [978,0,system_server,-1,java.lang.IllegalStateException,Service PersistentDataBlockService init timeout,...]
+
+--- [失败现场 2] run46：PDB 修复后新层 = watchdog 杀 system_server + displayfeature 5s SEGV 循环（实例46 qemu.log 实时摘录）---
+08-11 12:37:25.811  1091  1136 W Watchdog: *** WATCHDOG KILLING SYSTEM PROCESS: Blocked in monitor com.android.server.am.ActivityManagerService on monitor thread (watchdog.monitor) for 70s, Blocked in handler on main thread (main) for 70s, Blocked in handler on display thread (android.display) for 70s, Blocked in handler on animation thread (android.anim) for 70s
+08-11 12:37:25.812  1091  1136 W Watchdog:     at android.view.SurfaceControl.nativeBootFinished(Native Method)   ← display 线程卡 SF/WMS 链
+08-11 12:37:25.813  1091  1136 W Watchdog: *** GOODBYE!
+[197.607878][ T1] init: Service 'vendor.displayfeature-hal-1-0' (pid 5479) received signal 11 from uid 1000 pid 5479   ← 5s 一崩，与 watchdog 时序吻合
+
+--- [失败现场 3] displayfeature tombstone_31（实例46 /data/tombstones/，拉起即崩的完整栈）---
+pid: 16876, tid: 16876, name: vendor.xiaomi.h  >>> /vendor/bin/hw/vendor.xiaomi.hardware.displayfeature@1.0-service <<<
+uid: 1000
+signal 11 (SIGSEGV), code 1 (SEGV_MAPERR), fault addr 0x0000000000000000
+Cause: null pointer dereference
+backtrace:
+      #00 pc 00000000000776c0  libc.so (strtol+32)
+      #01 pc 0000000000077690  libc.so (atoi+16)
+      #02 pc 00000000000038cc  /vendor/lib64/librhytheyecare.so (android::RhyEyeCare::init()+236)
+      #03 pc 00000000000442c0  /vendor/lib64/hw/displayfeature.default.so (android::DisplayEffectBase::DisplayEffectBase(unsigned int)+3408)
+      #04 pc 00000000000442c0  /vendor/lib64/hw/displayfeature.default.so (android::DisplayEffectPlatform::DisplayEffectPlatform(unsigned int)+16)
+      #05 pc 00000000000231f0  /vendor/lib64/hw/displayfeature.default.so (android::DisplayEffect::DisplayEffect(unsigned int)+16)
+      #06 pc 000000000002588c  /vendor/lib64/hw/displayfeature.default.so (android::DisplayFeatureHal::init()+124)
+      #07 pc 0000000000025ac4  /vendor/lib64/hw/displayfeature.default.so (android::DisplayFeatureHal::open(...)+212)
+      #08 pc 00000000000044f0  /vendor/lib64/hw/vendor.xiaomi.hardware.displayfeature@1.0-impl.so (DisplayFeature::DisplayFeature(hw_module_t const*)+128)
+      #09 pc 0000000000005304  /vendor/lib64/hw/vendor.xiaomi.hardware.displayfeature@1.0-impl.so (HIDL_FETCH_IDisplayFeature+100)
+      ... libhidlbase registerPassthrough 链 ...
+      #17 pc 00000000000011b8  vendor.xiaomi.hardware.displayfeature@1.0-service (main+216)
+
+--- [失败现场 4] run47 遗留（实例47 qemu.log 现存原文）：watchdog RenderThread 卡死 + GL 应用 cmar 伪指针 SEGV（不挡 L1，新登记）---
+08-11 12:38:45.678  1278  1368 W Watchdog: *** WATCHDOG KILLING SYSTEM PROCESS: Blocked in handler on ui thread (android.ui) for 143s
+08-11 12:35:33.324  3708  4332 W MIUIScout App:     at android.graphics.HardwareRenderer.nSetStopped(Native Method)
+08-11 12:35:33.324  3708  4332 W MIUIScout App:     at android.graphics.HardwareRenderer.setStopped(HardwareRenderer.java:601)
+08-11 12:35:33.324  3708  4332 W MIUIScout App:     at android.view.ViewRootImpl.performDraw(ViewRootImpl.java:6277)
+08-11 12:34:43.597  1342  1714 F libc    : Fatal signal 11 (SIGSEGV), code 1 (SEGV_MAPERR), fault addr 0x23002700000000 in tid 1714 (mali-cmar-backe), pid 1342 (bootanimation)
+08-11 12:35:31.435  3259  3787 F libc    : Fatal signal 11 (SIGSEGV), code 1 (SEGV_MAPERR), fault addr 0xa2004a00000000 in tid 3787 (mali-cmar-backe), pid 3259 (iui.miwallpaper)
+08-11 12:35:33.591  4333  4372 F libc    : Fatal signal 11 (SIGSEGV), code 1 (SEGV_MAPERR), fault addr 0xa2004a00000000 in tid 4372 (mali-cmar-backe), pid 4333 (iui.miwallpaper)
+08-11 12:37:52.454  6070  6162 F libc    : Fatal signal 11 (SIGSEGV), code 1 (SEGV_MAPERR), fault addr 0xa2004a00000000 in tid 6162 (mali-cmar-backe), pid 6070 (iui.miwallpaper)
+
+--- [失败现场 5] run47 遗留：screencap 无 display ---
+screencap: Failed to get ID for any displays.（exit 1）
+
+======================================================================
+run68（v54，2026-10-11 12:34-12:57）watchdog→整机重启链现场（solution.md §12.1）
+原始采样见同目录 run68-watchdog.log
+----------------------------------------------------------------------
+SF 非真卡（被冻结时刻 sfdump 快照）：
+  cdh_sfdump: tid=770 surfaceflinger   state=1
+  cdh_sfdump:    pc=0x752ab40908 [libc.so+0xca908] lr=... [libutils.so+0x13c84]
+  cdh_sfdump:    k[0]=do_epoll_wait+0x7b0/0x83c        ← 主线程空闲
+  cdh_sfdump: tid=1167 binder:770_3     state=8193
+  cdh_sfdump:    k[0]=binder_thread_read+0x398/0x2468   ← binder 线程空闲
+SF 冻结实锤：State: t (tracing stop) / TracerPid: 23775（crash_dump64）
+自愈打地鼠（限频 60s 致冻结窗口 45-75s）：
+  cdh_sfdump: surfaceflinger frozen by tracer pid=13658 (crash_dump64) -> SIGKILL
+  ... 共 7 次（→24712），间隔 ~60s
+Scout/Watchdog 链：
+  ScoutHelper: getBinderInfo: ... to 770(/system/bin/surfaceflinger):1167 elapsed: 74.697s code: 1
+  08-11 12:46:19 W Watchdog: *** WATCHDOG KILLING SYSTEM PROCESS: Blocked ... for 67s
+  08-11 12:55:37 W Watchdog: *** WATCHDOG KILLING SYSTEM PROCESS: ... 67s
+  08-11 12:56:15 D nativehang: main:31: NativeHangStarting nativehang
+  → guest 自我重启（qemu.log 回 init 早期）→ adb offline
+伴生诱因（app 侧渲染卡顿，GPU job 假完成/fence 链）：
+  MIUIScout App: Event:APP_SCOUT_WARNING Thread:main backtrace:
+      at android.graphics.HardwareRenderer.nSetStopped(Native Method)
+      at android.view.ViewRootImpl.performDraw(ViewRootImpl.java:6277)
+  duration=2502ms（SystemUI / com.android.provision 复现）
+
+run70（v56，12:41）ptrace deny 生效后 watchdog 仍击穿——治本定案 = B2 渲染桥：
+  08-11 12:41:27 W Watchdog: *** WATCHDOG KILLING SYSTEM PROCESS: Blocked ... for 65s
+  08-11 12:41:27 I Watchdog: Rebooting system because: nativehang,/system/bin/surfaceflinger
+  （同刻 dmesg "deny crash_dump64 attach" 累计 47 次、SF TracerPid=0 无冻结）
+
+v55 构建失败现场（wire-kbase.sh 幂等失效，solution.md §12.2）：
+  ../drivers/gpu/drm/virtio/virtgpu_display.c:119:29: error: redefinition of 'cdh_vblank_timer_fn'
+  ../drivers/gpu/drm/virtio/virtgpu_display.c:129:12: error: redefinition of 'virtio_gpu_crtc_enable_vblank'
+  ../drivers/gpu/drm/virtio/virtgpu_display.c:138:13: error: redefinition of 'virtio_gpu_crtc_disable_vblank'
+v56 首次构建失败现场（ptrace.c 锚点 tab/空格）：
+  [wire-kbase] ptrace 拒绝 crash_dump 冻结 SF/composer/system_server（watchdog 断链）：锚点未命中
+
+================================================================
+### run79（v66）死锁态快照（§17：atom 滞留 COMPLETED 自死锁，path C）
+### 采样通道：guest /data/local/tmp/pollfd（pidfd_getfd 同 struct file）+ debugfs atoms + /proc wchan
+### 注：以下为死锁解除【前】的原始采样输出（解除后见 log-pass.txt）
+----------------------------------------------------------------
+== poll 判据（779/SurfaceFlinger fd=10、841/bootanimation fd=10，同一 /dev/mali0 struct file ino=1098）:
+revents=1 ready=1
+rc1=0
+revents=1 ready=1
+rc2=0
+  → revents=POLLIN：event_count != 0，完成事件已投递 event_list 但用户态不取（path C 铁证）
+  （对照：经 /proc/<pid>/fd/N 重新 open 的假报 revents=8/POLLERR——setup_state=NEED_VSN，判据无效版本）
+
+== /sys/kernel/debug/mali0/ctx/*/atoms 全景（St=4 COMPLETED 滞留）:
+== /sys/kernel/debug/mali0/ctx/15222_18/atoms
+  0,      201,  4,    0    0,                    0,
+== /sys/kernel/debug/mali0/ctx/15387_20/atoms
+== /sys/kernel/debug/mali0/ctx/15585_22/atoms
+  0,        0,  4,    0    0,                    0,
+== /sys/kernel/debug/mali0/ctx/16934_25/atoms
+== /sys/kernel/debug/mali0/ctx/19728_26/atoms
+== /sys/kernel/debug/mali0/ctx/779_0/atoms
+  0,      101,  4,    0    0,                    0,
+== /sys/kernel/debug/mali0/ctx/841_1/atoms
+  0,        0,  4,    0    0,                    0,
+  → 4 个 ctx 各 1 条 atom 滞留 St=4（req=0x201/0x0/0x101/0x0），全部"已完成但未交还用户态"
+
+== 779（SurfaceFlinger）线程全景（wchan）:
+1019 SWWatchDog | wchan=futex_wait_queue | sys=98 0xb4000071209fa618
+1020 BckgrndExec HP | wchan=futex_wait_queue | sys=98 0x71ee5cd310
+1021 RelBufCB | wchan=futex_wait_queue | sys=98 0x71ee5cd340
+1022 passBlur | wchan=futex_wait_queue | sys=98 0x71ee5cd368
+1024 binder:779_3 | wchan=binder_thread_read | sys=29 0x5
+1026 binder:779_4 | wchan=binder_thread_read | sys=29 0x5
+1187 binder:779_5 | wchan=futex_wait_queue | sys=98 0xb4000070a09df8d0
+779 surfaceflinger | wchan=do_epoll_wait | sys=22 0x1f
+799 binder:779_1 | wchan=binder_thread_read | sys=29 0x5
+800 binder:779_2 | wchan=futex_wait_queue | sys=98 0xb400006fc0a05140
+801 TracingMuxer | wchan=do_sys_poll | sys=73 0xb400006f509ed570
+802 RenderEngine | wchan=kbase_jd_submit | sys=29 0xa          ← 卡 submit！
+808 mali-mem-purge | wchan=futex_wait_queue | sys=98 0xb40000721e6864a8
+809-816 mali-utility-wo | wchan=futex_wait_queue
+817 mali-cmar-backe | wchan=futex_wait_queue | sys=98 0xb40000721e682450
+826 TimerDispatch | wchan=do_epoll_wait | sys=22 0x21
+828 app / 829 appSf / 830 RegionSampling / 831 RegSampIdle / 832 TouchTimer /
+833 IdleTimer / 834 surfaceflinger / 836 SurfaceFlinger: | wchan=futex_wait_queue
+838 HwBinder:779_1 | wchan=binder_thread_read | sys=29 0x3
+
+== 841（bootanimation）线程全景（wchan）:
+1249 mali-mem-purge | wchan=futex_wait_queue
+1250-1257 mali-utility-wo | wchan=futex_wait_queue
+1258 mali-cmar-backe | wchan=kbase_jd_submit | sys=29 0xa       ← 卡 submit！
+1260 mali-compiler | wchan=futex_wait_queue
+1412 HWC release | wchan=futex_wait_queue
+841 bootanimation | wchan=binder_thread_read | sys=29 0x3
+852 BootAnimation | wchan=futex_wait_queue
+  → 全部提交线程（779/802 RenderEngine、841/1258 cmar-backe）卡 kbase_jd_submit（sys=29 ioctl）
+
+== mali fdinfo（排除 O_ASYNC/SIGIO 路径）:
+== fdinfo 779/10
+pos:    0
+flags:  02404002        （O_RDWR|O_NONBLOCK|O_CLOEXEC，无 O_ASYNC）
+mnt_id: 42
+ino:    1098
+== fdinfo 841/10
+pos:    0
+flags:  02404002
+mnt_id: 42
+ino:    1098
+== 779 signals
+SigBlk: 0000000080000000
+SigIgn: 0000002000001000
+SigCgt: 0000004c400084f8
+
+== 干预实验（诊断性 take：pidfd_getfd 取同一 struct file，替用户态 read 走 1 个事件）:
+-- take 1 from 779:
+ev code=16387 nr=0
+taken=1
+-- RenderEngine wchan:
+futex_wait_queue                     ← submit 返回，线程解锁！
+-- atoms 779_0:（清空，槽位释放）
+-- poll again:
+revents=0 ready=0                    ← 事件队列归零
+  → 取走 1 个滞留事件立即解开 submit 死锁：事件滞留→槽位不释放→提交线程卡
+    submit→（提交+消费同线程）更不可能取事件 = path C 自死锁闭环
+
+== 后台代取循环（活体兜底）首批输出:
+started
+taken=0
+ev code=1 nr=0
+taken=1
+taken=0
+ev code=16387 nr=0
+  → 事件持续产生持续滞留，代取后系统恢复（见 log-pass.txt）
+
+== 对照实验（停取代取 25s 后）:
+-- poll 779:
+revents=0 ready=0
+-- poll 841:
+revents=0 ready=0
+-- 卡 submit 线程:（无）
+-- RenderEngine wchan:
+futex_wait_queue
+  → 死锁不复发：一次性自锁事故（开机早期触发），用户态恢复后 cmar 自有消费能力

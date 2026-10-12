@@ -84,7 +84,9 @@
       "bin/hw/android.hardware.security.keymint@3.0-service.mitee": "u:object_r:hal_keymint_default_exec:s0",
       "etc/init/android.hardware.security.keymint.mitee@3.0-service.rc": "u:object_r:vendor_file:s0",
       "etc/init/tee-supplicant.rc": "u:object_r:vendor_file:s0",
-      "etc/vintf/manifest/android.hardware.security.keymint-service.mitee.xml": "u:object_r:vendor_configs_file:s0"
+      "etc/vintf/manifest/android.hardware.security.keymint-service.mitee.xml": "u:object_r:vendor_configs_file:s0",
+      "lib64/egl/libGLES_mali.so": "u:object_r:same_process_hal_file:s0",
+      "bin/hw/android.hardware.gatekeeper-service.mitee": "u:object_r:hal_gatekeeper_default_exec:s0"
     },
     "note": "build/vendor/patch 注入文件的 security.selinux 标签，键 = 注入树内相对路径；vendor 阶段按此回填，标签缺失即报错退出。除 bin/netmgr_setup 与 bin/daemon（CDH 可执行件，pioneer_exec）外均为 CDH 新增的配置/脚本件（CDH 自定义域，无官方对应件），沿用同项目同键的既定标签值。注：etc/fstab.mt6833 与 etc/init/hw/* 不注入——官方 vendor 内已有（见 vendor 基座=官方 vendor 的设计）。"
   },

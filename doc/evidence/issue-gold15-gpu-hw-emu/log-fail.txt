@@ -1,0 +1,119 @@
+# issue-gold15-gpu-hw-emu · log-fail（被证伪的路径与失败现场，2026-10-12）
+
+本文件记录**本轮被证据否掉的假设**，避免后续重复投入。
+
+## F1 ✗ 假设「把 stock 厂商模块直接装到现行 CDH 内核上即可」
+
+判据：`tools/loadability_matrix.py devices/xiaomi/gold-15/out/kernel/Module.symvers official-dlkm`
+
+```
+内核 Module.symvers 导出符号: 17990
+厂商闭包模块: 14，自身导出符号并集: 2409
+  ged                              导入  227 | 本内核CRC一致   86 | CRC不符   67 | 兄弟模块提供   71 | 完全缺失    3
+  mali_kbase_mt6833_r49            导入  407 | 本内核CRC一致  167 | CRC不符  190 | 兄弟模块提供   48 | 完全缺失    2
+  mtk_gpufreq_wrapper_legacy       导入   38 | 本内核CRC一致   14 | CRC不符   18 | 兄弟模块提供    4 | 完全缺失    2
+  sspm                             导入   64 | 本内核CRC一致   36 | CRC不符   16 | 兄弟模块提供    2 | 完全缺失   10
+  ...
+合计导入 1005 条引用；唯一符号：一致 207，CRC 不符 232，兄弟提供 126，缺失 45
+
+[完全缺失样例（需 MTK 内核）]
+   KREE_CreateSession / KREE_TeeServiceCall / KREE_RegisterSharedmem
+   aee_rr_curr_gpu_dvfs_status / aee_rr_rec_gpu_dvfs_oppidx / aee_rr_rec_gpu_dvfs_vgpu
+   mtk_emimpu_init_region / mtk_emimpu_set_protection / mtk_emimpu_set_addr
+   mtk_get_gpu_loading_symbol / mtk_get_gpu_idle_symbol / mtk_get_gpu_ceiling_index_symbol
+   mt_get_abist_freq / mt_spower_get_leakage / mtk_dma_buf_set_name / mtk_emicen_get_rk_cnt
+   drm_register_fps_chg_callback / drm_unregister_fps_chg_callback
+   ipi_monitor_dump / met_gpu_api_ready / met_gpu_adv_api_ready
+```
+
+结论：**否**。20.6% 的引用 CRC 一致 + 45 个符号在内核中不存在 ⇒ 无论 vermagic 如何都不可能加载。
+"不改厂商内核二进制" 必须换 MTK 官方内核基座（见方案 §3.4 路线 D）。
+
+## F2 ✗ 假设「stock 官方内核可以直接当云机基座」
+
+判据：官方 `boot.img` 内嵌 config（`raw/official-kernel-config-key.txt`）
+
+```
+CONFIG_VIRTIO=y   CONFIG_VIRTIO_PCI=m   CONFIG_VIRTIO_BLK=m   CONFIG_VIRTIO_CONSOLE=m
+（无）CONFIG_VIRTIO_NET   （无）CONFIG_VIRTIO_INPUT   （无）CONFIG_VIRTIO_GPU
+（无）CONFIG_DRM_VIRTIO_GPU   （无）CONFIG_VIRTIO_SND
+```
+`system_dlkm` 78 个 GKI 模块中 virtio 只有 `virtio_balloon/blk/console/pci/pci_legacy_dev/pci_modern_dev/vmw_vsock_virtio_transport`。
+
+结论：**否（至少不是直接可用）**。换官方内核会同时失去现行云机的**网络/输入/显示（virtio-gpu）/音频**虚拟化，
+必须连 MTK 显示子系统一起仿真，或重建官方内核源码并补 virtio 开关（且要维持符号 CRC 不变）。
+
+## F3 ✗ 假设「vermagic 字符串不同 ⇒ stock 模块无法加载」
+
+厂商模块 `…-g4d05d8779bfd-4k` vs 官方内核 `…-ge56cf6b09cca-ab15511674-4k`，看似铁证。
+
+判据：`kernel/source/kernel/module/version.c:77-88`
+
+```c
+/* First part is kernel version, which we ignore if module has crcs. */
+int same_magic(const char *amagic, const char *bmagic, bool has_crcs)
+{
+	if (has_crcs) {
+		amagic += strcspn(amagic, " ");
+		bmagic += strcspn(bmagic, " ");
+	}
+	return strcmp(amagic, bmagic) == 0;
+}
+```
+
+结论：**假设错误**。有 `modversions` 时只比较第一空格之后的段（`SMP preempt mod_unload modversions aarch64`），
+版本串被忽略。**真正的门是符号 CRC（F1）**；本项勘误避免了把力气花在"对齐版本串"上。
+
+## F4 ✗ 假设「宿主侧缺 GPU 通路，需要从零造宿主渲染」
+
+判据：P1 现场（宿主产物 + `-device help`）
+
+结论：**否**。darwin 已有 `virgl_render_server` + MoltenVK + virglrenderer 的 venus host-pointer 补丁；
+linux 已有 `vhost-user-gpu` + 独立 renderer。缺口只在于**没有 Mali 设备模型**与**没有 Mali ISA 翻译器**。
+
+## F5 ✗ 假设「厂商 kbase 里有 MTK 平台接入点，需要逐条仿真」
+
+判据：子代理对 kbase 源码的检索 —— `grep -rnw -e mtk_gpufreq -e mtk_gpu_hal -e mtk_gpu_qos -e ged -e mediatek kbase/drivers kbase/include` → **0 命中**
+
+结论：**否**。上游 kbase 与平台只有通用回调（`struct kbase_platform_funcs_conf` / `kbase_pm_callback_conf`，
+devicetree 平台的 `kbase_platform_dvfs_event` 本身即空桩）。MTK 专有部分全在**厂商自己的 fork** 里
+（对应 F1 的 46 个 MTK 符号），因此 V2 档（用上游 kbase）**不需要**在驱动侧仿真 MTK 平台。
+
+## F6 ⚠ 现状路线失败现场（用户目标要摆脱的对象）
+
+判据：`../issue-gold15-vendor-gpu/log-pass.txt`（run81-83，2026-10-12）
+
+```
+B2 fill rt=0x5efce00000 rows=9216 surf=176128 w=1080 h=2400 ... filled=163200   [RT0 填色工作]
+VNC 272x2400 两帧 md5 相同 #888888 99.3%（静态灰，实时上屏未确认）
+Rebooting system because: nativehang,/system/bin/surfaceflinger （观察窗 6 次）
+```
+以及驱动侧改动规模 `wire-kbase.sh` 2127 行（6 组 kbase 补丁）。
+
+结论：现状 = **改驱动 + 不出真画面 + 重启链未断**；这正是"GPU 硬件仿真 + 宿主桥接"要替换的对象。
+
+## F7 ✗ 假设「客机换 Mesa 栈即可拿到完整图形能力（含 Vulkan）」
+
+判据：外部调研（`raw/external-prior-art.md` §2.3）
+
+- Mesa Panfrost 支持矩阵里 **G57/G68（Valhall v9）的 Vulkan 一栏为空**；Collabora 2025-07 原文：第一代 Valhall (V9) "currently
+  completely lacking support"。
+- 结论：**否**。路线 E 只能覆盖 **GLES**（≈3.1）侧；Android 15 上 `ro.hwui.use_vulkan=true` 的 Vulkan 路径仍只能靠厂商 Mali。
+  方案 §3.5 已按此修正（原稿"完整且成熟"是错的）。
+
+## F8 ✗ 假设「ARM Fast Models 的 Mali 模型可直接采购落地」
+
+判据：外部调研（`raw/external-prior-art.md` §2.5）
+
+- 公开型号只有 **Mali_G710 / Mali_G715（v10+）**，**无 v9/G57**；GRM 默认只输出**渐变图案**；
+  GGA+GRM 集成 Mali 驱动**必须自写 `libnwhal`**（ARM 不提供宿主 GPU 后端）；**GGA 已弃用**；无 macOS 形态。
+- 结论：**否**。方案新增 §3.6 路线 F 并判为"不可直接落地"。
+
+## F9 ✗ 假设「Mali ISA 已经有可用的开源反编译器/翻译器」
+
+判据：外部调研（`raw/external-prior-art.md` §2.2）
+
+- 只有 disassembler（Mesa `ISA.xml`/`v9.xml` 驱动）；**没有任何** Mali ISA → SPIR-V/NIR/LLVM 翻译器；
+  Apple Air 格式无公开汇编器，唯一官方 IR 入口是 metal-shaderconverter（DXIL/SPIR-V → Metal）。
+- 结论：**否**。T3（真渲染）在 Apple Silicon 宿主上**无先例、无现成工具链**；方案 §4 G4 与 §6 R6/R7 已据此改写，
+  §8 增加"下一轮 0：否定性验证"作为先决动作。

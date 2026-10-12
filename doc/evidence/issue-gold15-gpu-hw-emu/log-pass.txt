@@ -1,0 +1,111 @@
+# issue-gold15-gpu-hw-emu · log-pass（通过现场，2026-10-12）
+
+全部命令在 `/Volumes/work/cloud-phone-hub` 下执行；工具见本目录 `tools/`。
+
+## P1 宿主平台与 QEMU GPU 设备面
+
+$ uname -a
+Darwin cuimingqiangdeMacBook-Pro.local 24.3.0 Darwin Kernel Version 24.3.0 ... RELEASE_ARM64_T6041 arm64
+$ sw_vers
+ProductName:  macOS / ProductVersion: 15.3.2 / BuildVersion: 24D81
+$ system_profiler SPDisplaysDataType | head -8
+      Chipset Model: Apple M4 Pro / Total Number of Cores: 16 / Metal Support: Metal 3
+
+$ out/qemu/dist/darwin/bin/qemu-system-aarch64 --version
+QEMU emulator version 11.0.2 (v11.0.2-112-g1002758ca35-dirty)
+
+$ DYLD_LIBRARY_PATH=$PWD/lib out/qemu/dist/darwin/bin/qemu-system-aarch64 -device help | grep -i gpu
+name "vhost-user-gpu", bus virtio-bus
+name "vhost-user-gpu-pci", bus PCI
+name "virtio-gpu-device", bus virtio-bus
+name "virtio-gpu-gl-device", bus virtio-bus
+name "virtio-gpu-gl-pci", bus PCI, alias "virtio-gpu-gl"
+name "virtio-gpu-pci", bus PCI, alias "virtio-gpu"
+  → 结论：宿主 GPU 通路在（virgl/venus→MoltenVK）；**没有任何 Mali 设备模型**
+
+$ ls out/qemu/dist/darwin/libexec out/qemu/dist/darwin/lib
+libexec/: virgl_render_server  vhost-device-media  … 
+lib/:     libMoltenVK.dylib  libvulkan.1.dylib  MoltenVK_icd.json
+
+## P2 厂商图形模块的接口面（官方 vendor_dlkm，EROFS）
+
+$ fsck.erofs --extract=out/tmp/gold-hw-emu/official-dlkm --no-preserve-owner \
+    devices/xiaomi/gold-15/roms/gold_global_images_OS3.0.5.0.VNQMIXM_15.0/vendor_dlkm_a.img
+$ python3 tools/analyze_ko.py official-dlkm/mali_kbase_mt6833_r49.ko
+  vermagic: 6.6.118-android15-8-g4d05d8779bfd-4k SMP preempt mod_unload modversions aarch64
+  name: mali_kbase_mt6833_r49
+  alias: of:N*T*Carm,mali-valhall
+  depends: mtk_gpufreq_wrapper_legacy,ged,mtk_gpu_hal,mrdump,sspm,mtk_gpu_qos
+  softdep: pre: memory_group_manager
+  未定义符号数: 406
+  其中 MTK/平台相关: 46
+    - ged_dvfs_cal_gpu_utilization_ex_fp / ged_dvfs_gpu_freq_commit_fp / …
+    - mtk_get_gpu_loading / mtk_get_gpu_memory_usage_fp / mtk_notify_gpu_power_change
+    - sspm_reserve_mem_get_phys / aee_rr_curr_gpu_dvfs_status / regulator_get_optional / of_clk_get
+  → 完整 14 个模块：raw/official-modinfo.txt
+
+## P3 官方内核事实（boot.img → 内核 + 内嵌 config）
+
+$ python3 - <<'PY'   # 见 tools/parse_boot.py 同逻辑
+... gzip 解压 boot.img[4096:4096+kernel_size] → 36 801 024 B；IKCFG_ST..IKCFG_ED → config 211 851 B
+PY
+Linux version 6.6.118-android15-8-ge56cf6b09cca-ab15511674-4k (kleaf@build-host)
+  6.6.118-android15-8-ge56cf6b09cca-ab15511674-4k SMP preempt mod_unload modversions aarch64
+
+$ grep -E '^CONFIG_(MODVERSIONS|MODULE_SIG|VIRTIO|DRM|DMABUF_HEAPS|ARM64_4K_PAGES|LOCALVERSION)' config
+CONFIG_LOCALVERSION="-4k"
+CONFIG_ARM64_4K_PAGES=y
+CONFIG_MODVERSIONS=y
+CONFIG_MODULE_SIG=y  CONFIG_MODULE_SIG_ALL=y  (无 MODULE_SIG_FORCE)
+CONFIG_VIRTIO=y  CONFIG_VIRTIO_PCI=m  CONFIG_VIRTIO_BLK=m  CONFIG_VIRTIO_CONSOLE=m  CONFIG_VIRTIO_BALLOON=m
+CONFIG_DRM=y  CONFIG_DRM_KMS_HELPER=y  CONFIG_DMABUF_HEAPS=y
+  → **无 VIRTIO_NET / VIRTIO_INPUT / VIRTIO_GPU / DRM_VIRTIO_GPU / VIRTIO_SND**（GKI 模块清单 78 个亦无）
+
+## P4 官方 DTB 的硬件契约（vendor_boot.img 内）
+
+$ python3 tools/fdt_dump.py official-boot/vendor_boot.img mali gpufreq ged
+## //mali
+   compatible = mediatek,mali arm,mali-valhall
+   reg = 0x0 0x13000000 0x0 0x4000
+   interrupts = 0 364 4 0 0 365 4 0 0 366 4 0 0 367 4 0 0 368 4 0
+   interrupt-names = GPU MMU JOB EVENT PWR
+## //gpufreq
+   compatible = mediatek,gpufreq
+   reg-names = mfg_top_config mfg_pll mfg_rpc sleep nth_emicfg_reg infracfg fmem_ao_debug_ctrl
+               infracfg_ao infra_ao_debug_ctrl infra_ao1_debug_ctrl topckgen efuse mfg_cpe_control
+               mfg_cpe_sensor infra_bcrm
+   clocks = clk_mux clk_ref_mux clk_main_parent clk_sub_parent subsys_bg3d clk_fhctl
+   nvmem-cell-names = efuse_segment_cell
+## //gpufreq_wrapper   compatible = mediatek,gpufreq_wrapper ; gpufreq-version = 0x2 ; gpueb-support = 0x0
+## //ged              compatible = mediatek,ged
+## //power-controller compatible = mediatek,mt6833-scpsys syscon (含 mfg1/mfg2 域)
+  → 全文：raw/official-dtb-gpu-nodes.txt
+
+## P5 设备模型接口面（kbase r49p0 源码，pristine 上游）
+
+- MMIO 抽象唯一落点：`kbase_reg_read/write32/64`（kbase/hw_access/Kbuild:29-33 编译期二选一）
+- 3 条中断：tag JOB=0/MMU=1/GPU=2（kbase/backend/gpu/mali_kbase_irq_internal.h:27-29），byname 获取（mali_kbase_core_linux.c:439-475）
+- 寄存器块：GPU_CONTROL 0x0000 / JOB_CONTROL 0x1000（JS 槽 0x1800+n*0x80）/ MMU_CONTROL 0x2000（AS 0x2400+n*0x40）
+- 硬依赖：`GPU_COMMAND=SOFT_RESET` → `GPU_IRQ_RAWSTAT.RESET_COMPLETED(1<<8)`（500 ms 超时，pm_driver.c:3296-3400）
+- 身份：GPU_ID 必须 0x09030010（product_id 0x09000003，r0p1）
+- 工程量：必须档 ≈2 250–4 050 行 C；次要 ≈700–1 600；可桩 ≈80–150
+- 风险：`/lib/firmware/valhall-1691526.wa`（TTRX_3485）——`THREAD_FEATURES[31:30]=SOFTWARE(3)` 或 r0p1 可绕开
+
+## P6 方案文档与证据落地
+
+$ ls devices/xiaomi/gold-15/build/doc/gpu-hw-emu.md
+$ ls devices/xiaomi/gold-15/build/doc/evidence/issue-gold15-gpu-hw-emu/{solution.md,raw,tools}
+  → 方案分档（A/B/C/D/E）、四道门（G0–G4）、宿主桥接设计、工作量/风险表齐备
+
+## P7 外部先例与生态调研（2026-10-12，来源见 raw/external-prior-art.md）
+
+| 问题 | 结论 |
+|---|---|
+| 有公开的"寄存器级仿真 Mali + 桥接宿主 GPU"先例吗 | ❌ 无（唯一同类实践 = NO_MALI + 自加 platform_device，与本仓库现行路线同构、不出画） |
+| QEMU 有 Mali 设备模型吗 | ❌ 无（本仓库 QEMU 源码检索 + `-device help` 双证） |
+| gfxstream/VirGL/Venus 能驱动 stock Mali 栈吗 | ❌ 不能（API 重映射，要求客机跑它们自己的 ICD） |
+| 有 Mali ISA → SPIR-V/NIR/LLVM 翻译器吗 | ❌ 无（只有 disassembler；Apple Air 无公开汇编器，唯一官方 IR 入口 = metal-shaderconverter） |
+| 客机换 Mesa 栈（panfrost/panvk）能覆盖吗 | ⚠️ 只能 GLES；**PanVK 对 Valhall v9 完全不支持** |
+| ARM Fast Models 有 Mali 模型吗 | ⚠️ 有 GRM/GGA，但公开型号只有 G710/G715（v10+）、默认渐变图案、需自写 `libnwhal`、GGA 已弃用、无 macOS |
+| 宿主换真 Mali 的先例 | ✅ 通用形态成熟；MT8370/Genio 700（Mali-G57）已有 panfrost 主线补丁；MT6833 stock 栈无公开先例 |
+| 关键风险论据 | ⚠️ "没有真 Mali 做 oracle，寄存器级仿真的正确性无法收敛"（Collabora） → 抬升路线 C 优先级 |

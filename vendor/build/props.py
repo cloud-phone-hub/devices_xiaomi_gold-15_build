@@ -65,6 +65,18 @@ PATCH_PROP = "build.prop"
 # 处理，实测无 ro.product.bootimage.* 日志），故改在此文件。
 VENDOR_SETS = {"ro.zygote": "zygote64"}
 
+# —— ro.frp.pst 置空：禁掉 PersistentDataBlockService（L1 阻塞，run46 取证）——
+# 官方 gold /vendor/build.prop 声明 `ro.frp.pst=/dev/block/by-name/frp`。AOSP
+# SystemServer 以「ro.frp.pst 非空」为启动 PersistentDataBlockService 的判据
+# （vendor 内无 ro.persistent_data_block，实测 grep vendor.img = 0 处）。
+# 云机 vda（lineage 底包 GPT）没有 frp 分区 → PDB onStart 三次 open
+# /dev/block/by-name/frp 全 ENOENT → init 线程死于 IllegalStateException
+# "persistent partition not readable" → mInitDoneSignal 永不置位 →
+# SystemServer boot phase 500 waitForInitDoneSignal() 30s 超时 → system_server
+# FATAL → zygote 每 ~30s 重启循环（run45 qemu.log 实测 137+98 次，直接阻塞
+# sys.boot_completed=1）。云机无需 FRP（出厂保护），置空属性让 PDB 不启动。
+FRP_SETS = {"ro.frp.pst": ""}
+
 _APPLY_PY = r'''#!/usr/bin/env python3
 import os
 import sys
@@ -152,7 +164,7 @@ with open(bpath, "w", encoding="utf-8") as f:
     f.write("\n".join(blines) + "\n")
 ''' % {"target": TARGET, "sets": SETS, "root": C_DST_DIR,
        "boot_key": BOOT_PATCH_KEY, "src_key": PATCH_SOURCE_KEY,
-       "patch_prop": PATCH_PROP, "vendor_sets": VENDOR_SETS}
+       "patch_prop": PATCH_PROP, "vendor_sets": {**VENDOR_SETS, **FRP_SETS}}
 
 
 def write_workspace(work_dir):

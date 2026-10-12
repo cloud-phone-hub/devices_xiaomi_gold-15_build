@@ -1,0 +1,19 @@
+08-11 12:51:04.247   745   790 D MIUIScout System: Enter FW_SCOUT_HANG from Level 0 to 1; Scout Check count : 2 waittime : 9994ms
+[  666.608228] cdh_sfdump: ===== composer@3.3-se frozen (17 threads) =====
+[  696.812460] cdh_sfdump: surfaceflinger frozen by tracer pid=23154 (crash_dump64) -> SIGKILL
+[  711.918980] cdh_sfdump: ===== system_server frozen (64 threads) =====
+[  742.382506] cdh_sfdump: ===== composer@3.3-se frozen (17 threads) =====
+[  757.484242] cdh_sfdump: surfaceflinger frozen by tracer pid=24712 (crash_dump64) -> SIGKILL
+[  802.816196] cdh_sfdump: ===== composer@3.3-se frozen (17 threads) =====
+[  848.366222] cdh_sfdump: ===== surfaceflinger frozen (34 threads) =====
+[  848.454956] cdh_sfdump: ===== composer@3.3-se frozen (17 threads) =====
+[  848.576822] cdh_sfdump: ===== system_server frozen (64 threads) =====
+[  879.094562] cdh_sfdump: surfaceflinger frozen by tracer pid=31281 (crash_dump64) -> SIGKILL
+[  879.097522] cdh_sfdump: ===== composer@3.3-se frozen (17 threads) =====
+[  909.298379] cdh_sfdump: ===== composer@3.3-se frozen (17 threads) =====
+[  939.507505] cdh_sfdump: surfaceflinger frozen by tracer pid=32007 (crash_dump64) -> SIGKILL
+[  984.814876] cdh_sfdump: ===== composer@3.3-se frozen (17 threads) =====
+[  999.915689] cdh_sfdump: surfaceflinger frozen by tracer pid=1182 (crash_dump64) -> SIGKILL
+[ 1015.021445] cdh_sfdump: ===== composer@3.3-se frozen (17 threads) =====
+[ 1045.484261] cdh_sfdump: ===== surfaceflinger frozen (34 threads) =====
+[ 1075.692106] cdh_sfdump: ===== surfaceflinger frozen (34 threads) =====
