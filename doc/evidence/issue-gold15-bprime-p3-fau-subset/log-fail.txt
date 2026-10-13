@@ -1,0 +1,46 @@
+# issue-gold15-bprime-p3-fau-subset —— 失败面/踩坑（2026-10-13）
+
+[1] wsel 位被 decode_src 丢弃（语义事实 2）
+  现象：`u1.w1` 与 `u1.w0` 解码同形（slot 相同），高字读取无法表达。
+  根因：mode=2 分支用 `(byte >> 1) & 0x1F` 取 slot，把 src 字节 bit0（wsel，
+  asm.py `w1` 修饰 `encoded_src |= 0x1` 的落点）一起移掉了。
+  修法：fau/fau_special 分支补 `op.wsel = byte & 1`；字索引 = (page*32+slot)*2+wsel。
+  教训：解码字段要与汇编器 encode_source 的逆逐位对齐，别只对"值域"。
+
+[2] va2spirv 与 asm.py 同进程跑撞 valhall 全局重复解析断言
+  现象：同一 Python 进程 import va2spirv 再 import asm（或二次
+  valhall_parse_isa）报 "appeared 2 times"（ISA 元数据全局断言）。
+  修法：编码回环分进程——驱动脚本只 import va2spirv 做 decode，再以
+  subprocess 调 `python3 asm.py` 汇编比对。
+  教训：valhall.py 的 ISA 解析是一次性全局态，跨工具复用必须分进程。
+
+[3] 真机字形 FMA(u0.h1, u1.w1, 0) 双 FAU 槽无法汇编
+  现象：asm.py parse_asm 报 "Too many FAU slots"。
+  根因：FAUState 对非消息指令限额 **1 槽 2 字**（u0 与 u1 是两个 64 位槽），
+  即硬件每条指令至多读一个 uN 条目——真机 6 条 FAU-FMA 也都只有 1 个 FAU 源。
+  修法：拆为 `MOV.i32 r5, u1.w1` + `FMA.f32 r2, u0.h1, r5, 0x0`，
+  语义与期望像素 (255,128,26,255) 不变，另覆盖整数语境 uN.w1 取高字。
+  附：`u1.w0` 语法无坑（w0 可写可省，w1 必写）。
+
+[4] fl_cmp_fau 的 `u2.w1` 不是 WARP_ID 特殊值
+  现象：FAU 建模后 `ICMP_OR.u32.gt.m1 r5, r8, u2.w1, 0x0` 不再 fail-loud
+  （翻译 exit 0），矩阵该负例将挂。
+  根因：真机字 00f0c50180c08508 的 B 源字节 0x85 = mode 10（uniform u2.w1），
+  旧注释按特殊值表（fau_special_page_0[2]=warp_id）误读；且按新语义
+  warp_id 本身已建模为常量 0，也不再是 fail-loud 对象。
+  修法：用例改指真正未建模的特殊值 `framebuffer_size.w1`，保留
+  「比较族 × FAU 特殊值 fail-loud」的覆盖意图；注释据实重写。
+
+[5] PushConstant 变量进 OpEntryPoint 接口撞 SPIR-V 版本规则
+  现象：spirv-val 报 "In SPIR-V 1.3 or earlier, OpEntryPoint interfaces must be
+  OpVariables with Storage Class of Input(1) or Output(3). Found Storage Class 9"。
+  根因：任务要求 var_fau 进接口（SPIR-V 1.4 起强制列全全局变量），而模块头
+  版本 1.0（≤1.3 反而禁止）；且 spirv-val --target-env vulkan1.1 只收 ≤1.3。
+  修法：SPV_VERSION 升 0x00010400（1.4），run_matrix 校验目标 vulkan1.1→
+  vulkan1.2（唯一一处既有内容改动）；MoltenVK 1.4.2 渲染复验全绿。
+
+[6] 覆盖率预期口径偏差（77/11 → 实测 88/0）
+  现象：任务预期「可直译 77、源形态不支持 11（+6 FMA 转正）」。
+  实测：FAU 取值接进 val_to_ssa/_widen_half/emit_mov 通用通道后，17 条
+  FAU 拦路**全部**转正（FMA×15 + RSHIFT_AND×1 + MOV×1），源形态不支持清零，
+  可直译 71→88。预期只计了 6 条带 widen 的 FMA，属保守口径；以实测为准。

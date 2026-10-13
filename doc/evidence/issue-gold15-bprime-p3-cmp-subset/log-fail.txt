@@ -1,0 +1,63 @@
+================================================================================
+issue-gold15-bprime-p3-cmp-subset —— 失败面原始记录
+环境：Apple M4 Pro / macOS / MoltenVK 1.4.2
+采集时间：2026-10-12
+说明：本批比较族未出现实现期失败（一次通过全部 spirv-val 与逐像素）；
+      以下为「负向对照」（证明比对具备区分度）+「fail-loud」（未建模形态主动拒绝）。
+================================================================================
+
+=================== [A] 负向对照：正确 shader + 错期望 ===================
+# 用 out_cmp.frag.spv 的真实输出 (255,26,255,255)，故意传期望 (0,0,0,0)
+# 期望：逐像素全部失败（证像素确为真实比较结果，非条件被忽略）
+$ ./harness out_cmp.frag.spv out_cmp.vert.spv 0 0 0 0
+像素(66,65) 在三角形内但为 255,26,255,255
+像素(67,65) 在三角形内但为 255,26,255,255
+像素(68,65) 在三角形内但为 255,26,255,255
+像素(69,65) 在三角形内但为 255,26,255,255
+像素(70,65) 在三角形内但为 255,26,255,255
+...（略）
+逐像素比对：256x256，三角形内 7812 px、外 0 px（边界带跳过），失败 7812
+exit=1
+# 结论：错误期望下 7812 px 全部报错、exit 1 → 比对**具备区分度**，
+#       正向用例的「失败 0」是真实命中而非比对失效。
+
+# 附：cmp_neg（条件互补对照）自身期望 (0,0,0,0) → 失败 0 / exit 0，
+#     与正向用例逐通道不同（255,26,255,255）→ 再次证明结果随比较条件变化。
+
+=================== [B] fail-loud 四例（未建模形态，均 exit 2）===================
+
+--- [B1] condition=gtlt（未建模）---------------------------------------------
+# fl_cmp_cond.asm：ICMP_OR.u32.gtlt.m1（gtlt/total 依赖 NaN 全序语义，未建模）
+$ python3 va2spirv.py fl_cmp_cond.bin /tmp/fl_cmp_cond.frag.spv /tmp/fl_cmp_cond.vert.spv
+[03] 0x00f0c40680c00b0a  ICMP_OR.u32        dest=reg:4 srcs=[reg:10, reg:11, lut:0]
+      meta={'condition': 6, 'result_type': 2}
+错误：ICMP_OR.u32 翻译失败：未建模的比较条件 gtlt
+exit=2
+
+--- [B2] result_type=u1（未建模）---------------------------------------------
+# fl_cmp_rtype.asm：ICMP_OR.u32.gt.u1（u1=64 位比较低半，内部编码，未建模）
+$ python3 va2spirv.py fl_cmp_rtype.bin /tmp/fl_cmp_rtype.frag.spv /tmp/fl_cmp_rtype.vert.spv
+[03] 0x00f0c401c0c00b0a  ICMP_OR.u32        dest=reg:4 srcs=[reg:10, reg:11, lut:0]
+      meta={'condition': 1, 'result_type': 3}
+错误：ICMP_OR.u32 翻译失败：result_type=u1（64 位比较低半）未建模
+exit=2
+
+--- [B3] 源为 FAU 特殊寄存器（未建模）---------------------------------------
+# fl_cmp_fau.asm：真机字 0x00f0c50180c08508，B 源 u2.w1 = BIR_FAU_WARP_ID（硬件特殊寄存器）
+$ python3 va2spirv.py fl_cmp_fau.bin /tmp/fl_cmp_fau.frag.spv /tmp/fl_cmp_fau.vert.spv
+[02] 0x00f0c50180c08508  ICMP_OR.u32        dest=reg:5 srcs=[reg:8, fau:2, lut:0]
+      meta={'condition': 1, 'result_type': 2}
+错误：ICMP_OR.u32 翻译失败：暂不支持操作数形态 fau（P2 子集外）
+exit=2
+
+--- [B4] C 源非常量（未建模）-----------------------------------------------
+# fl_cmp_csrc.asm：C=r12（由 IADD_IMM 产生的 SSA 值），仅建模常量 C
+$ python3 va2spirv.py fl_cmp_csrc.bin /tmp/fl_cmp_csrc.frag.spv /tmp/fl_cmp_csrc.vert.spv
+[03] 0x00f0c401800c0a0b  ICMP_OR.u32        dest=reg:4 srcs=[reg:11, reg:10, reg:12]
+      meta={'condition': 1, 'result_type': 2}
+错误：ICMP_OR.u32 翻译失败：比较族 C 源仅建模常量（需为 0 或整数域常量）
+exit=2
+
+# 结论：比较族所有「未建模分支」（condition gtlt/total、result_type u1、
+#       FAU 特殊寄存器源、非常量 C）均在分派前/发射期被显式拒绝，退出码 2，
+#       绝不猜测编码或静默错译。

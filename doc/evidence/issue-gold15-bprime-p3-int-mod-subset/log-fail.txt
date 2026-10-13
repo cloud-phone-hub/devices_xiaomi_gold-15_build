@@ -1,0 +1,28 @@
+=== CDH gold-15 B′ P3：整数字节选择（.b0）与异步 flow 修饰收尾验证日志（失败面与守卫） ===
+
+[1] 整型源未建模 widen 字段在修改前的拦截现场
+- 现场：未修改前，va2spirv.py 的 src_mod_mask() 未将整型 ALU（IADD.u32/ISUB.u32/IMUL.i32）的 widen 字段豁免，
+  当处理真机字 0x08a0c200100ac739（IMUL.i32.wait0 r2, r57, 0xC0B0A090.b0）时，mask=0xf03c000000 命中 bit 28（widen=4），
+  报错："错误：IMUL.i32 带未建模的源修饰（0x08a0c200100ac739）"（exit 2）。
+- 根因：Mesa Valhall ISA 将 32 位整型指令的源修饰重载为 swizzles_32_bit 枚举，其中 index=4 代表 .b0（提取第 0 字节）。
+- 解决：在 src_mod_mask() 中豁免 INT_ALU_MODELED 的 widen 字段，并在 _emit_ialu/_int_src 中对 widen=4 施加 OpBitwiseAnd(0xFF) / 常量折叠。
+
+[2] 非法/未建模 widen 值的显式 fail-loud 拦截（fl_ialu_widen）
+- 测试代码：fl_ialu_widen.asm（使用 IMUL.i32 r2, r57, 0xC0B0A090.h0，对应 widen=2 半字选择）
+- 执行输出：
+  [fl_ialu_widen] 翻译 exit 2（预期 fail-loud=2）
+  错误：IMUL.i32 翻译失败：未建模的整型源 widen=2（仅支持 .none 与 .b0）
+- 验证结论：非 0、非 4 的 widen 值被严密拦截，严防通配放行带来的错译风险。
+
+[3] 未建模 flow 标志的 fail-loud 拦截（FLOW_PASSTHROUGH 守卫）
+- 机制：只有在单线程数据流模型下天然就绪的 wait 槽等待与 reconverge 标记才被纳入 FLOW_PASSTHROUGH；
+  一旦遇到未建模控制流（如 discard、wait_resource 或 reserved 码），在主循环第一遍即精准报出：
+  "错误：{ins.name} 带未建模的 flow 修饰 {flow_name}（{w:#018x}）"（exit 2）。
+
+[4] 负向对照像素比对失败（imul_b0_neg）
+- 测试用例：frag_imul_b0_neg.asm（生成标准 (255, 255, 255, 255) 渲染），在 run_matrix.py 中故意赋予错期望 (0, 0, 0, 0)。
+- 执行输出：
+  像素(66,65) 在三角形内但为 255,255,255,255
+  逐像素比对：256x256，三角形内 7812 px、外 0 px（边界带跳过），失败 7812
+  exit 1
+- 验证结论：离屏逐像素比对具备极高灵敏度，测试通道无假阳性。

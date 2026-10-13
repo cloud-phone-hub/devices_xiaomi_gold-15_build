@@ -1,0 +1,70 @@
+# issue-gold15-bprime-p3-fau-subset —— 通过面（2026-10-13，MoltenVK 1.4.2 / Apple M4 Pro）
+
+[1] 回归矩阵（run_matrix.py，39/39）
+  ... 26 渲染正例 render exit 0（flat/fma/sfu/mod/vary×4/ialu×2/shift×3/cmp×4/
+      cvt×2/branch×3/loop×2/widen/fau），
+  ... 2 对照 ialu_neg/cvt_neg exit 1（预期失败），
+  ... 11 fail-loud exit 2（fl_br_*×4 / fl_cmp_*×4 / fl_loop_nest / fl_widen_res /
+      fl_fau_ptr）
+  合计：39 PASS / 0 FAIL
+
+[2] frag_fau 逐像素（期望 255,128,26,255）
+  逐像素比对：256x256，三角形内 7812 px、外 0 px（边界带跳过），失败 0
+  负向对照 ./harness rg_fau.frag.spv rg_fau.vert.spv 255 0 0 255（exit 1）：
+    像素(66,65) 在三角形内但为 255,128,26,255
+    像素(67,65) 在三角形内但为 255,128,26,255
+    像素(68,65) 在三角形内但为 255,128,26,255
+    像素(69,65) 在三角形内但为 255,128,26,255
+    像素(70,65) 在三角形内但为 255,128,26,255
+    逐像素比对：256x256，三角形内 7812 px、外 0 px（边界带跳过），失败 7812
+
+[3] spirv-dis rg_fau.frag.spv 关键行（PushConstant 块 + 取值 + widen 链）
+               OpCapability Shader
+               OpCapability Float16
+               OpCapability Int16
+               OpEntryPoint Fragment %63 "main" %14 %21
+               OpDecorate %_arr_int_int_256 ArrayStride 4
+               OpDecorate %_struct_18 Block
+               OpMemberDecorate %_struct_18 0 Offset 0
+  %_arr_int_int_256 = OpTypeArray %int %int_256
+   %_struct_18 = OpTypeStruct %_arr_int_int_256
+  %_ptr_PushConstant__struct_18 = OpTypePointer PushConstant %_struct_18
+           %21 = OpVariable %_ptr_PushConstant__struct_18 PushConstant
+           %25 = OpAccessChain %_ptr_PushConstant_int %21 %int_0 %int_2   ; u1.w0
+           %26 = OpLoad %int %25
+           %27 = OpBitcast %float %26
+           %32 = OpAccessChain %_ptr_PushConstant_int %21 %int_0 %int_0   ; u0.w0
+           %33 = OpLoad %int %32
+           %38 = OpUConvert %ushort %35
+           %39 = OpBitcast %half %38
+           %40 = OpFConvert %float %39                                   ; u0.h0 widen
+           %45 = OpAccessChain %_ptr_PushConstant_int %21 %int_0 %int_3   ; u1.w1
+           %46 = OpLoad %int %45
+
+[4] 真机编码回环（va2spirv decode 与 asm.py 分进程；asm.py 试装逐位比对）
+  FMA.f32 r2, r0, u5.h0, 0x0.neg
+    0x00b2c20404c08a00 vs 真机 0x00b2c20404c08a00 -> 逐位命中
+  FMA.f32 r2, r1, u4.w1.h1, r2^
+    0x00b2c20008428901 vs 真机 0x00b2c20008428901 -> 逐位命中
+  FMA.f32 r5, r63, u0.w1.h1, 0x0.neg
+    0x00b2c50408c0813f vs 真机 0x00b2c50408c0813f -> 逐位命中
+  FMA.f32 r5, r3, u0.w1.h0, r5^
+    0x00b2c50004458103 vs 真机 0x00b2c50004458103 -> 逐位命中
+  FMA.f32 r63, r63^, u0.h1, 0x0.neg
+    0x00b2ff0408c0807f vs 真机 0x00b2ff0408c0807f -> 逐位命中
+  FMA.f32 r3, r3^, u0.h0, r63^
+    0x00b2c300047f8043 vs 真机 0x00b2c300047f8043 -> 逐位命中
+  回环 6/6
+
+[5] 真机 160 字覆盖率重算（out/tmp/p3-decode-be.txt，同口径：
+    decode_word + SUPPORTED + src_mod_mask + 源形态检查）
+  基线（FAU 未建模）: 可直译 71 / 未建模修饰 15 / 不支持指令 57 / 源形态不支持 17
+  本批（FAU 已建模）: 可直译 88 / 未建模修饰 15 / 不支持指令 57 / 源形态不支持 0
+  17 条 FAU 拦路构成：FMA×15（6 带 widen + 9 纯字读）、RSHIFT_AND×1、MOV×1
+  ——FAU 取值走通用通道后全部转正（+17），不止单列的 6 条 widen-FMA
+  （任务预期 77/11 只计 6 条转正，为保守口径）
+  未建模修饰 15 构成：src_mod_mask 1（IMUL src0 字节选择 .b00）、flow≠none 10、
+    比较族 condition/result_type 非默认 4
+
+# 结论：FAU uniform 源（uN 64 位条目 / wsel 字选择 / widen h0-h1）在 Metal 上
+# 逐像素可证；真机 6 条 FAU-FMA 字编码回环逐位命中；源形态不支持清零。

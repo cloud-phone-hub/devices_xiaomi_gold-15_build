@@ -1,0 +1,34 @@
+# issue-gold15-bprime-p3-fma-subset —— 失败面（打通过程踩坑实录，2026-10-12）
+
+[1] SPIR-V OpExtInstImport 放错逻辑布局段
+  现象：spirv-val 报 "error: line 6: ExtInstImport is in an invalid layout section
+        %8 = OpExtInstImport \"GLSL.std.450\""。
+  根因：最初把 OpExtInstImport 追加进 const_types（types/constants 段）。SPIR-V
+        逻辑布局要求 OpExtInstImport 位于第 3 段——Capability/Extension 之后、
+        OpMemoryModel 之前。
+  修法：改在 build() 组装 header 段时输出——先 OpCapability，再 OpExtInstImport，
+        再 OpMemoryModel。修后 spirv-val PASS。
+
+[2] GLSL.std.450 扩展指令编号（易错点）
+  现象：（预防性核对）GLSL.std.450 的 `Fma` 编号。
+  根因：GLSL.std.450 序号 10 = Fract（小数部分），**Fma = 50**。若误写 10 会得到
+        错误语义（fract）且不报错。
+  修法：常量 GLSL_FMA = 50（并经 spirv-dis 反汇编核对输出为 `... Fma ...` 确认）。
+
+[3] 测试用例数值选择受限（Valhall 小常量 LUT 很小）
+  现象：想用 0.5/0.25/0.75 等「好看」的分数构造 FMA，但 Mesa ISA.xml 的 immediates
+        LUT 只有 0.0/1.0/2.0/0.1f/512.0/50.0/2^-7 等 32 个，无 0.5/0.25/0.75。
+  影响：且输出为 UNORM8（clamp 到 [0,1]）——大数乘加会被 clamp 到 255，掩盖
+        「真乘加 vs 误译」的差异。
+  修法：选 FMA(0.1f,0.1f,0.1f)=0.11→字节 28；该值落在 (0,1) 内、量化远离 0.5 边界，
+        且与误译 a+b+c=77 / 丢C=3 / 丢乘=26 四者互异，具强区分力。
+
+[4] 旧 harness 期望色硬编码为红（255,0,0,255）
+  现象：需验证 FMA 输出 28 时，harness 固定比对 255 会误报失败。
+  修法：给 harness.c 增加可选 4 参数 expect_r/g/b/a（默认 255,0,0,255），
+        既有 P2 用例不传参 → 行为不变（回归仍失败 0，向后兼容）。
+
+[附] FMA 源修饰（swizzle/neg/abs）未建模
+  Mesa ISA.xml：A swz@28/neg@38/abs@39、B swz@26/neg@36/abs@37、C swz@24/neg@34/abs@35。
+  本 MVP 未实现，故在 main() 中对 FMA 校验 FMA_FLAG_MASK 命中即**报错退出（fail-loud）**，
+  避免静默错译。真机样本（36 个 FMA）带修饰比例待统计。

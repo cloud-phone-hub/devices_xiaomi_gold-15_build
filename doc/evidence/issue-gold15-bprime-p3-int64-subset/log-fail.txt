@@ -1,0 +1,61 @@
+# issue-gold15-bprime-p3-int64-subset —— 失败面与守卫现场（2026-10-13）
+
+## 1. 扩充前阻塞现场（修改前未支持指令）
+
+修改前遇到真机字 0x01abc20020004240（bin-007f00006c80[02]）：
+[02] 0x01abc20020004240  IADD.s64           dest=reg:2 srcs=[reg_ptr:0, reg_ptr:2] flow=none
+错误：不支持的指令 IADD.s64（P2 子集外）
+exit 2
+
+修改前遇到真机字 0x01a3c000202740ec（bin-007f00026e00[06]）：
+[06] 0x01a3c000202740ec  SHADDX.u64         dest=reg:0 srcs=[fau_special:6, reg_ptr:0] flow=none
+      meta={'shift': 2}
+错误：不支持的指令 SHADDX.u64（P2 子集外）
+exit 2
+
+## 2. 负向对照渲染现场（int64_neg 错期望）
+
+以错误期望 (0, 0, 0, 0) 运行 harness 对照正例渲染输出（正确色值为 51, 102, 153, 255）：
+$ ./harness int64_neg.frag.spv int64_neg.vert.spv 0 0 0 0
+像素(66,65) 在三角形内但为 51,102,153,255
+像素(67,65) 在三角形内但为 51,102,153,255
+像素(68,65) 在三角形内但为 51,102,153,255
+像素(69,65) 在三角形内但为 51,102,153,255
+像素(70,65) 在三角形内但为 51,102,153,255
+逐像素比对：256x256，三角形内 7812 px、外 0 px（边界带跳过），失败 7812
+exit 1
+
+证实：像素并非假阳性全 0，且 harness 能精确逐像素比对并拦截错误值。
+
+## 3. fail-loud 守卫现场 1：fl_iadd64_widen（IADD.s64 未建模的源 B widen 修饰）
+
+指令：IADD.s64 r2, r0^, r2^.b0（widen=4 为低字节，非 .w0 字提取）
+$ python3 /Volumes/work/cloud-phone-hub/deps/mesa/src/panfrost/compiler/bifrost/valhall/asm.py fl_iadd64_widen.asm fl_iadd64_widen.bin
+$ python3 va2spirv.py fl_iadd64_widen.bin fl_iadd64_widen.frag.spv fl_iadd64_widen.vert.spv
+[00] 0x0110c000000001c0  IADD_IMM.i32       dest=reg:0 srcs=[lut:0] flow=none
+      meta={'constant': 1}
+[01] 0x0110c100000000c0  IADD_IMM.i32       dest=reg:1 srcs=[lut:0] flow=none
+      meta={'constant': 0}
+[02] 0x0110c200000001c0  IADD_IMM.i32       dest=reg:2 srcs=[lut:0] flow=none
+      meta={'constant': 1}
+[03] 0x0110c300000000c0  IADD_IMM.i32       dest=reg:3 srcs=[lut:0] flow=none
+      meta={'constant': 0}
+[04] 0x01abc20010004240  IADD.s64           dest=reg:2 srcs=[reg_ptr:0, reg_ptr:2] flow=none
+[05] 0x7800c00000000000  NOP                dest=None srcs=[] flow=end
+错误：IADD.s64 翻译失败：64 位操作数暂仅支持 none 或 .w0 (widen=4)
+exit 2
+
+## 4. fail-loud 守卫现场 2：fl_shaddx_widen（SHADDX.u64 未建模的源 B widen 修饰）
+
+指令：SHADDX.u64 r4, sample, r2^.b0, shift:2（widen=4 为低字节，非 .w0 字提取）
+$ python3 /Volumes/work/cloud-phone-hub/deps/mesa/src/panfrost/compiler/bifrost/valhall/asm.py fl_shaddx_widen.asm fl_shaddx_widen.bin
+$ python3 va2spirv.py fl_shaddx_widen.bin fl_shaddx_widen.frag.spv fl_shaddx_widen.vert.spv
+[00] 0x0110c200000001c0  IADD_IMM.i32       dest=reg:2 srcs=[lut:0] flow=none
+      meta={'constant': 1}
+[01] 0x0110c300000000c0  IADD_IMM.i32       dest=reg:3 srcs=[lut:0] flow=none
+      meta={'constant': 0}
+[02] 0x01a3c400102742ec  SHADDX.u64         dest=reg:4 srcs=[fau_special:6, reg_ptr:2] flow=none
+      meta={'shift': 2}
+[03] 0x7800c00000000000  NOP                dest=None srcs=[] flow=end
+错误：SHADDX.u64 翻译失败：64 位操作数暂仅支持 none 或 .w0 (widen=4)
+exit 2

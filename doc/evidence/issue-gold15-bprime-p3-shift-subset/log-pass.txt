@@ -1,0 +1,133 @@
+# issue-gold15-bprime-p3-shift-subset —— 通过现场（log-pass）
+
+采集环境：Apple M4 Pro / macOS / MoltenVK 1.4.2；
+spirv 工具：/Users/cuimingqiang/Library/Android/sdk/ndk/29.0.14206865/shader-tools/darwin-x86_64/
+Mesa 工具：deps/mesa/src/panfrost/compiler/bifrost/valhall/{asm.py,ISA.xml}
+
+---
+
+## 1) 编码回环：真机字 ↔ asm.py（3/3 逐位命中）
+
+    LSHIFT_OR.i32 r8, r6, 0x0.b00, r7       -> 0x00b4c8011107c006   (bin-007f00006c80[05])
+    LSHIFT_OR.i32 r8, r4, 0x0.b00, r5       -> 0x00b4c8011105c004   (bin-007f00006c80[07])
+    RSHIFT_AND.i32 r0, r61, 0x13121110.b00, u6.w1 -> 0x00b4c000108dcc3d   (bin-007f00026e00[03])
+
+（三条均与 P3 采样字逐位一致。`0x13121110` = Immediates LUT index 12；`u6.w1` = FAU u6 高字，编码 0x8d。）
+
+## 2) 解码 + 翻译 + 分派（frag_shift，128B / frag 832B）
+
+    [00] 0x0091cd00000000d1  MOV.i32            dest=reg:13 srcs=[lut:1036831949] flow=0
+    [01] 0x0110ca00000002c0  IADD_IMM.i32       dest=reg:10 srcs=[lut:0] flow=0   meta={'constant': 2}
+    [02] 0x0110cb00000001c0  IADD_IMM.i32       dest=reg:11 srcs=[lut:0] flow=0   meta={'constant': 1}
+    [03] 0x0110cc00000002c0  IADD_IMM.i32       dest=reg:12 srcs=[lut:0] flow=0   meta={'constant': 2}
+    [04] 0x0110ce0000000cc0  IADD_IMM.i32       dest=reg:14 srcs=[lut:0] flow=0   meta={'constant': 12}
+    [05] 0x0110cf00000002c0  IADD_IMM.i32       dest=reg:15 srcs=[lut:0] flow=0   meta={'constant': 2}
+    [06] 0x0110d000000002c0  IADD_IMM.i32       dest=reg:16 srcs=[lut:0] flow=0   meta={'constant': 2}
+    [07] 0x00b4c401110c0b0a  LSHIFT_OR.i32      dest=reg:4  srcs=[reg:10, reg:11, reg:12] flow=0
+    [08] 0x00b4c50010100f0e  RSHIFT_AND.i32     dest=reg:5  srcs=[reg:14, reg:15, reg:16] flow=0
+    [09] 0x0090c00000150004  U16_TO_F32         dest=reg:0  srcs=[reg:4] flow=0
+    [10] 0x00b2c00000c00d00  FMA.f32            dest=reg:0  srcs=[reg:0, reg:13, lut:0] flow=0
+    [11] 0x0090c10000150005  U16_TO_F32         dest=reg:1  srcs=[reg:5] flow=0
+    [12] 0x00b2c10000c00d01  FMA.f32            dest=reg:1  srcs=[reg:1, reg:13, lut:0] flow=0
+    [13] 0x0091c200000000c0  MOV.i32            dest=reg:2  srcs=[lut:0] flow=0
+    [14] 0x0091c300000000c0  MOV.i32            dest=reg:3  srcs=[lut:0] flow=0
+    [15] 0x7800c00000000000  NOP                dest=None   srcs=[] flow=15
+
+（1036831949 = 0x3DCCCCCD = 0.1f 位型，用作整数→float 缩放因子；`.b00` 字节选择在解码面不额外标注。）
+
+## 2b) 真机取材（frag_shift_real，112B / frag 776B；2 条真机 LSHIFT_OR 字）
+
+    [05] 0x00b4c8011105c004  LSHIFT_OR.i32      dest=reg:8  srcs=[reg:4, lut:0, reg:5] flow=0
+    [08] 0x00b4c8011107c006  LSHIFT_OR.i32      dest=reg:8  srcs=[reg:6, lut:0, reg:7] flow=0
+
+（真机 shift 源为小常量 LUT 0x0 = 0，`.b00` 字节选择 → 移位量 0，即纯按位或。）
+
+## 3) spirv-dis 核对（frag，移位族行）
+
+    --- shift ---
+         %24 = OpShiftLeftLogical  %int %16 %18       <-- LSHIFT_OR r4 = r10 << r11
+         %25 = OpBitwiseOr         %int %24 %19       <--   ... | r12
+         %26 = OpShiftRightLogical %int %21 %22       <-- RSHIFT_AND r5 = r14 >> r15
+         %27 = OpBitwiseAnd        %int %26 %23       <--   ... & r16
+         %30 = OpBitwiseAnd %int %25 %int_65535       <-- U16_TO_F32 低 16 位掩码
+         %31 = OpConvertUToF %float %30
+         %34 = OpExtInst %float %13 Fma %31 %float_0_100000001 %float_0
+    --- shift_real ---
+         %21 = OpShiftLeftLogical %int %16 %int_0     <-- LSHIFT_OR r8 = r4 << 0
+         %22 = OpBitwiseOr        %int %21 %17
+         %30 = OpShiftLeftLogical %int %18 %int_0     <-- LSHIFT_OR r8 = r6 << 0
+         %31 = OpBitwiseOr        %int %30 %20
+
+## 4) spirv-val（6 模块全 PASS）
+
+    out_shift.frag.spv          PASS
+    out_shift.vert.spv          PASS
+    out_shift_real.frag.spv     PASS
+    out_shift_real.vert.spv     PASS
+    out_shift_neg.frag.spv      PASS
+    out_shift_neg.vert.spv      PASS
+
+## 5) MoltenVK 逐像素比对（正向全绿）
+
+    $ ./harness out_shift.frag.spv      out_shift.vert.spv      153 51 0 0
+    逐像素比对：256x256，三角形内 7812 px、外 0 px（边界带跳过），失败 0   exit=0
+
+    $ ./harness out_shift_real.frag.spv out_shift_real.vert.spv 0 51 153 0
+    逐像素比对：256x256，三角形内 7812 px、外 0 px（边界带跳过），失败 0   exit=0
+
+    $ ./harness out_shift_neg.frag.spv  out_shift_neg.vert.spv  0 255 0 0
+    逐像素比对：256x256，三角形内 7812 px、外 0 px（边界带跳过），失败 0   exit=0
+
+（`shift`：r0=(2<<1)|2=6→6*0.1=0.6→153；r1=(12>>2)&2=2→0.2→51。
+ `shift_real`：r1=2|2=2→51；r2=2|4=6→153。
+ `shift_neg`：r0=(2>>1)&2=0→0；r1=(12<<2)|2=50→clamp 1→255。）
+
+## 6) 回归：用新翻译器重跑既有 14 用例（spirv-val 全 PASS，逐像素失败 0 / exit 0）
+
+    flat: 0        sfu: 0         fma: 0        mod: 0
+    vary: 0        vary_v2: 0     vary_v3: 0    vary_real: 0
+    ialu: 0        ialu_real: 0   ialu_neg: 0
+    cvt: 0         cvt_real: 0    cvt_neg: 0（负向对照自身期望）
+
+## 7) 负向对照（错期望被逐像素揭穿）
+
+    $ ./harness out_shift.frag.spv out_shift.vert.spv 0 255 0 0
+    像素(66,65) 在三角形内但为 153,51,0,0
+    ...
+    逐像素比对：256x256，三角形内 7812 px、外 0 px（边界带跳过），失败 7812
+    exit=1
+
+（同一 shader 用自身期望 (153,51,0,0) 则失败 0；`shift_neg` 把两条算子互换，
+ 结果逐通道不同，证移位方向确实影响结果。）
+
+## 8) fail-loud（两条守卫，均 exit 2）
+
+    $ python3 va2spirv.py fl_shift_notres.bin ...   # LSHIFT_OR.i32 置 not_result（bit30）
+    错误：LSHIFT_OR.i32 带未建模的 not_result 修饰（0x00b4c401510c0b0a）
+    exit=2
+
+    $ python3 va2spirv.py fl_shift_widen.bin ...    # shift 源字节选择改 0（非 .b00，widen!=4）
+    错误：LSHIFT_OR.i32 shift 源字节选择未建模（widen=0x0，仅支持 .b00）
+    exit=2
+
+（另：B 源 `not`(bit35)、A 源 `widen`(bit36-39) 由 src_mod_mask() 自动纳入，
+ 出现即报「带未建模的源修饰」exit 2，本批一并覆盖。）
+
+## 9) 产物指纹（md5）
+
+    frag_shift.asm             1270B  7c8733f48caecb980a0ad97b502e30a9
+    frag_shift.bin             128B   68d9e9b10ec8e0acc926e8a1b2e3bd34
+    frag_shift_real.asm        914B   0e2f773c8de1cd4d04531eba72580716
+    frag_shift_real.bin        112B   a0716b79b75384dca36d1831f7efa6db
+    frag_shift_neg.asm         708B   46123ec1928faefcf52db43e62c68115
+    frag_shift_neg.bin         128B   a0db2fc45dd0fda9a076978159cc2c0f
+    out_shift.frag.spv         832B   0e629bac82589fd1f17421d4075c03e6
+    out_shift.vert.spv         504B   f0228fea070b6ef15ae9629a5ae52a9f
+    out_shift_real.frag.spv    776B   da774f5e17a29ce8f984c7440c5345e2
+    out_shift_neg.frag.spv     832B   4b2574b63c39f6efbf872154f3dbd261
+    va2spirv.py                —      6590208933115cd168f58a065d8afa04
+
+## 10) 覆盖统计
+
+    本批 +3 条（LSHIFT_OR.i32=2、RSHIFT_AND.i32=1）+2 种 opcode
+    87/160（11 种）→ 92/160（14 种）→ 95/160（16 种，59.4%）

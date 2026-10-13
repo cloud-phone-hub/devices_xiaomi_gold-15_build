@@ -1,0 +1,68 @@
+# issue-gold15-bprime-p3-shader-capture —— 通过面（2026-10-12，instance 96 / gold-15 全局版）
+
+[1] 工具链一致性（改用 build/scripts/build-kernel.py 注入 ubuntu clang21 builder）
+  Image：/Volumes/work/cloud-phone-hub/devices/xiaomi/gold-15/out/kernel/Image
+       32295424 B
+       strings: "Linux version 6.6.127-4k-cdh (root@d8a7761ed779)
+       (Ubuntu clang version 21.1.8 (6ubuntu1), Ubuntu LLD 21.1.8)"
+  mali_kbase.ko：1273936 B
+       vermagic=6.6.127-4k-cdh SMP preempt mod_unload modversions aarch64
+       strings: "Ubuntu clang version 21.1.8 (6ubuntu1)"
+  vendor_dlkm.img：out/dist/rom/vendor_dlkm.img 13209600 B
+
+[2] 客机运行内核 banner（同源确证）
+  dmesg: "Linux version 6.6.127-4k-cdh (root@a3d93e056c8b)
+         (Ubuntu clang version 21.1.8 (6ubuntu1), Ubuntu LLD 21.1.8) #25
+         SMP PREEMPT Mon Oct 12 10:47:25 UTC 2026"
+
+[3] 探针全链路命中（out/tmp/p3-dmesg3.txt，共 8412 行）
+  P3 code vmap       40
+  P3 chase           24
+  P3 chase-code      24
+  P3 frag fb          8
+  P3 code unreadable  0     <- 关键：GPU-exec 区经 kbase_vmap 全部可读
+  P3 code user        0
+
+  链首（提交方进程 = RenderEngine）：
+    cdh-mali: P3 chain tgid=796 comm=RenderEngine jc=0x5effd82480 req=0x4e
+  三级指针样例（Compute，stage=1）：
+    cdh-mali: P3 shader-desc off=+0x40 p=0x5effffe000 type=8 stage=1 bin=0x7f00001000
+    cdh-mali: P3 code vmap 0x7f00001000
+    cdh-mali: P3 chase +0x68 -> 0x5effffe000 stage=1 bin=0x7f00001000
+    cdh-mali: P3 chase-code 0x7f00001000
+
+[4] 捕获产物：10 个唯一真机 shader（每个 128B）—— 3 Compute + 3 Fragment + 4 Vertex
+  0x007f00001000 len=128 md5=03c6a11440084daed8b77ab870a11b57 stage=1(Compute)
+  0x007f0000c900 len=128 md5=5e5a80fae3254845f2e218219fad72d1 stage=1(Compute)
+  0x007f00006c80 len=128 md5=dc7307e23eeebddbfbae1bed39fde0af stage=1(Compute)
+  0x007f00026e00 len=128 md5=90d6172ba5900ac959577acf5a02240b stage=2(Fragment)
+  0x007f00023e80 len=128 md5=0895ea83a652135dff7f46fed3106b88 stage=2(Fragment)
+  0x007f00037880 len=128 md5=2f0384555314c3e7dbc3340a926458d1 stage=2(Fragment)
+  0x007f00032e80 len=128 md5=22a3174a3828bb2a4c21aa8f4d4780de stage=3(Vertex)
+  0x007f00023e00 len=128 md5=d2f49cb4d75a25989cd65ff61fc36203 stage=3(Vertex)
+  0x007f00037380 len=128 md5=6546a0fb703beede535d48bd988549fd stage=3(Vertex)
+  0x007f00034180 len=128 md5=ec738ce8849c9655e5763c217d6e1ae3 stage=3(Vertex)
+
+[5] 译码（大端 >Q，out/tmp/p3-decode-be.txt）
+  Fragment 样例 bin-007f00026e00（原始 8B 组按大端是 u64）：
+    00000000: 4800c00000000000 6878860473883d8c 005d8414b10000c0 00b4c000108dcc3d
+    解码：00 NOP / 01 LD_TILE / 02 LD_VAR_BUF_IMM.f16 / 03 RSHIFT_AND.i32 /
+          04-05 U16_TO_F32 / 06 SHADDX.u64 / 07 LOAD.i32 / 08/11 S16_TO_F32 /
+          09/12/14/15 FMA.f32 / 10/13 FADD.f32
+
+  全局 opcode 分布（160 指令，UNKNOWN = 0）：
+     36 FMA.f32      25 NOP          11 LD_PKA.i64   10 LD_ATTR_IMM
+      7 FADD.f32      5 LOAD.i64       5 STORE.i64     5 LOAD.i32
+      5 IADD_IMM.i32  4 BRANCHZ        4 FRSQ.f32      3 STORE.i32
+      3 ICMP_OR.u32   3 MOV.i32        3 LD_VAR_BUF_IMM.f16  3 CLPER.i32
+      2 LOAD.i96      2 ISUB.u32       2 IMUL.i32      2 LOAD.i128
+      2 LSHIFT_OR.i32 2 LEA_BUF_IMM    2 U16_TO_F32    2 S16_TO_F32
+      1 IADD.u32 / IADD.s64 / ATEST / BLEND / BRANCHZI / LD_TILE /
+        RSHIFT_AND.i32 / SHADDX.u64 / FMAX.f32 / FRCP.f32 /
+        LD_VAR_BUF_IMM.f32 / FCMP_OR.f32
+
+# 结论：P3 前置「真机输入闭环」达成——
+#   ① 工具链与运行内核同源（Ubuntu clang 21.1.8）；
+#   ② ShaderEnv→ShaderProgram→.Binary 三级指针全命中，GPU-exec 区经 kbase_vmap 可读；
+#   ③ 拿到含三阶段（Compute/Fragment/Vertex）的 10 个真机 shader；
+#   ④ 字节序定为大端，解码 UNKNOWN=0，为 P3 指令子集扩充提供真实样本。

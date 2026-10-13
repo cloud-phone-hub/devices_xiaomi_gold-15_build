@@ -1,0 +1,61 @@
+# issue-gold15-bprime-p3-mem-subset —— 通过面（2026-10-13，MoltenVK 1.4.2 / Apple M4 Pro）
+
+[1] 回归矩阵（run_matrix.py，42/42 PASS）
+  ... 27 渲染正例 render exit 0（flat/fma/sfu/mod/vary×4/ialu×2/shift×3/cmp×4/
+      cvt×2/branch×3/loop×2/widen/fau/mem），
+  ... 3 对照 ialu_neg/cvt_neg/mem_neg exit 1（预期失败），
+  ... 12 fail-loud exit 2（fl_br_*×4 / fl_cmp_*×4 / fl_loop_nest / fl_widen_res /
+      fl_fau_ptr / fl_mem_align）
+  合计：42 PASS / 0 FAIL
+
+[2] frag_mem 逐像素（期望 255,128,64,255）
+  用例覆盖：LD_PKA.i64 (FAU u2.w0 载入基址) + LOAD.i64 (载入 float 1.0, 0.5) +
+            LOAD.i32 (载入 float 0.25) + STORE.i32 (写入 offset 24) +
+            LOAD.i32 (读回 offset 24 验证写入值 1.0) -> MOV r0..r3 输出
+  逐像素比对：256x256，三角形内 7812 px、外 0 px（边界带跳过），失败 0，exit 0
+  负向对照 ./harness rg_mem.frag.spv rg_mem.vert.spv 255 0 0 255（exit 1）：
+    像素(66,65) 在三角形内但为 255,128,64,255
+    像素(67,65) 在三角形内但为 255,128,64,255
+    像素(68,65) 在三角形内但为 255,128,64,255
+    逐像素比对：256x256，三角形内 7812 px、外 0 px（边界带跳过），失败 7812
+
+[3] spirv-dis rg_mem.frag.spv 关键行（StorageBuffer 块 + 动态/常量索引 + LOAD/STORE）
+               OpCapability Shader
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint Fragment %78 "main" %14 %21 %27
+               OpDecorate %_runtimearr_int ArrayStride 4
+               OpDecorate %_struct_24 Block
+               OpMemberDecorate %_struct_24 0 Offset 0
+               OpDecorate %27 DescriptorSet 0
+               OpDecorate %27 Binding 0
+  %_runtimearr_int = OpTypeRuntimeArray %int
+   %_struct_24 = OpTypeStruct %_runtimearr_int
+  %_ptr_StorageBuffer__struct_24 = OpTypePointer StorageBuffer %_struct_24
+  %_ptr_StorageBuffer_int = OpTypePointer StorageBuffer %int
+           %27 = OpVariable %_ptr_StorageBuffer__struct_24 StorageBuffer
+           %33 = OpAccessChain %_ptr_StorageBuffer_int %27 %int_0 %int_0   ; LOAD.i64 word0
+           %34 = OpLoad %int %33
+           %35 = OpAccessChain %_ptr_StorageBuffer_int %27 %int_0 %int_1   ; LOAD.i64 word1
+           %36 = OpLoad %int %35
+           %39 = OpAccessChain %_ptr_StorageBuffer_int %27 %int_0 %int_2   ; LOAD.i32 word2
+           %40 = OpLoad %int %39
+           %43 = OpAccessChain %_ptr_StorageBuffer_int %27 %int_0 %int_6   ; STORE.i32 offset:24
+                 OpStore %43 %34
+           %45 = OpAccessChain %_ptr_StorageBuffer_int %27 %int_0 %int_6   ; LOAD.i32 读回
+           %46 = OpLoad %int %45
+
+[4] 真机 33 条内存指令回环验证（Mesa asm.py 试装与语义比对）
+  - 11/11 LD_PKA.i64 逐位命中（100% BIT-MATCH）
+  - 5/5 LOAD.i64、5/5 STORE.i64、5/5 LOAD.i32、3/3 STORE.i32、2/2 LOAD.i96、2/2 LOAD.i128
+    结构与语义全部命中（除 asm.py 语法强制产生的 bit6 reg_ptr 外逐位完全一致）
+
+[5] 真机 160 字覆盖率重算（out/tmp/p3-decode-be.txt，同口径：
+    decode_word + SUPPORTED + src_mod_mask + 源形态检查）
+
+| 指标 | 上批基线（FAU） | 本批（内存族） | 变化 |
+|---|---|---|---|
+| 不支持指令 | 57 | **24** | **-33（内存族 33 条全清）** |
+| 可直译指令 | 88 | **107** | **+19** |
+| 未建模修饰 | 15 | **29** | +14（包含内存异步 wait 标） |
+| 源形态不支持 | 0 | **0** | 保持清零 |
+| 覆盖率 (160-不支持)/160 | 64.4% | **85.0%** | **+20.6% 跃升** |

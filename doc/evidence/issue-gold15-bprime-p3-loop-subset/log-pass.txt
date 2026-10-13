@@ -1,0 +1,69 @@
+================================================================================
+issue-gold15-bprime-p3-loop-subset —— 通过面原始记录
+环境：Apple M4 Pro / macOS / MoltenVK 1.4.2
+工具：Mesa asm.py / va2spirv.py / spirv-val / spirv-dis / harness
+采集时间：2026-10-12
+本批：后向分支/循环（OpLoopMerge）+ 寄存器模型 SSA/OpPhi → Function 变量 + OpBitcast
+================================================================================
+
+=================== [1] 装配 loop 用例 ===================
+  frag_loop.asm → frag_loop.bin OK（96B）
+  frag_loop_neg.asm → frag_loop_neg.bin OK（96B）
+  fl_loop_nest.asm → fl_loop_nest.bin OK
+
+=================== [2] 解码 + 翻译（frag_loop）===================
+[03] 0x0110d40000000114  IADD_IMM.i32   dest=reg:20 srcs=[reg:20]   meta={'constant': 1}   ← body acc+=1
+[04] 0x0110d5ffffffff15  IADD_IMM.i32   dest=reg:21 srcs=[reg:21]   meta={'constant': 4294967295}  ← body cnt-=1（#-1）
+[05] 0x001fc007fffffd15  BRANCHZ        dest=None srcs=[reg:21]     meta={'eq': 0, 'offset': 134217725}
+      # offset 134217725 = 0x7FFFFFD = -3（27 位补码，符号扩展）→ 回跳 target=5+1-3=3
+翻译完成：out_frag_loop.frag.spv / out_frag_loop.vert.spv（frag 1368B）
+
+=================== [3] spirv-val（loop/loop_neg × frag/vert = 4 模块全 PASS）===================
+  frag_loop:     val PASS
+  frag_loop_neg: val PASS
+# --target-env vulkan1.1（含 Vulkan 结构化循环校验）全过
+
+=================== [4] spirv-dis（frag_loop：do-while 循环 CFG）===================
+# spirv-dis out_frag_loop.frag.spv | grep 关键行
+           %16 = OpLabel                       ← entry 块（初始化）
+                 OpBranch %25                  ← fall-through 进循环 header
+           %25 = OpLabel                       ← 循环 header（body：acc+=1, cnt-=1）
+           %33 = OpINotEqual %bool %32 %int_0  ← 回边条件：cnt != 0
+                 OpLoopMerge %34 %35 None      ← 循环构造（merge=%34, continue=%35）
+                 OpBranchConditional %33 %35 %34   ← 真→cont(回边)、假→merge(退出)
+           %35 = OpLabel                       ← continue 块
+                 OpBranch %25                  ← 回边 → header
+           %34 = OpLabel                       ← merge（循环退出，续译输出）
+# → do-while 循环结构正确：OpLoopMerge + 回边 OpBranch %25；寄存器变量承载无需 phi。
+
+=================== [5] MoltenVK 逐像素比对（失败 0 / exit 0）===================
+--- frag_loop 期望 (102 0 0 255)  [cnt=4 → 4 次迭代 acc=4] ---
+逐像素比对：256x256，三角形内 7812 px、外 0 px（边界带跳过），失败 0   exit=0
+--- frag_loop_neg 期望 (51 0 0 255) [cnt=2 → 2 次迭代 acc=2] ---
+逐像素比对：256x256，三角形内 7812 px、外 0 px（边界带跳过），失败 0   exit=0
+# loop(102) ≠ loop_neg(51) → 循环确实按计数迭代（非固定输出）。
+
+=================== [6] 全量回归 26 用例（失败 0，证 SSA→变量重构零破坏）===================
+flat: OK   sfu: OK   fma: OK   mod: OK
+vary: OK   vary_v2: OK   vary_v3: OK   vary_real: OK
+ialu: OK   ialu_real: OK   ialu_neg: OK
+cvt: OK   cvt_real: OK   cvt_neg: OK
+shift: OK   shift_real: OK   shift_neg: OK
+cmp: OK   cmp_real: OK   cmp_or: OK   cmp_neg: OK
+branch: OK   branch_neg: OK   branch_eq: OK
+loop: OK   loop_neg: OK
+（每例：翻译成功 + spirv-val 双 PASS + 逐像素失败 0）
+回归失败用例数 = 0
+# → 寄存器从 SSA/OpPhi 切换到 Function 变量 + OpBitcast，直线/分支全部 opcode 语义等价。
+
+=================== [7] md5 指纹 ===================
+  293fb45401cd53185d16945b5d8bf9c5  frag_loop.asm
+  71d0d9d5bcf1c93cf363a4f3f2e0736a  frag_loop.bin
+  a7f3068e00a43ceb3b8a624aea24bba3  frag_loop_neg.asm
+  b61007fde3e178586dd91a88327051f3  frag_loop_neg.bin
+  de7d348ec663da54e1c8dccc323c531e  fl_loop_nest.asm
+  0adb9a86674c2a386c91c151cfb88b94  fl_loop_nest.bin
+  6b0567a16e899d74ba211c6bcfaccc58  out_frag_loop.frag.spv
+  f0228fea070b6ef15ae9629a5ae52a9f  out_frag_loop.vert.spv
+  850e74ebb50005206fc701255829e1bc  out_frag_loop_neg.frag.spv
+  613d134f6440478d7a5e5c4d5635ae61  va2spirv.py

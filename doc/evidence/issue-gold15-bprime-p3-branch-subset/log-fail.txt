@@ -1,0 +1,59 @@
+================================================================================
+issue-gold15-bprime-p3-branch-subset —— 失败面原始记录
+环境：Apple M4 Pro / macOS / MoltenVK 1.4.2
+采集时间：2026-10-12
+说明：本批 BRANCHZ 未出现实现期失败（一次通过全部 spirv-val 与逐像素）；
+      以下为「负向对照」（证明比对具备区分度）+「fail-loud」（未建模形态主动拒绝）。
+================================================================================
+
+=================== [A] 负向对照：正确 shader + 错期望 ===================
+# 用 out_frag_branch.frag.spv 的真实输出 (51,0,0,255)，故意传期望 (102,0,0,255)
+$ ./harness out_frag_branch.frag.spv out_frag_branch.vert.spv 102 0 0 255
+像素(66,65) 在三角形内但为 51,0,0,255
+像素(67,65) 在三角形内但为 51,0,0,255
+像素(68,65) 在三角形内但为 51,0,0,255
+像素(69,65) 在三角形内但为 51,0,0,255
+...（略）
+逐像素比对：256x256，三角形内 7812 px、外 0 px（边界带跳过），失败 7812
+exit=1
+# 结论：错误期望下 7812 px 全部报错、exit 1 → 比对**具备区分度**；
+#       正向用例的「失败 0」是真实命中而非比对失效。
+
+# 附：frag_branch(51) 与 frag_branch_neg/eq(102) 逐通道不同 → 证分支走向确实
+#     随比较结果 / eq 位变化（不是固定输出）。
+
+=================== [B] fail-loud 五例（未建模形态，均 exit 2）===================
+
+--- [B1] 后向分支（offset 负 = 回跳/循环）---------------------------------
+# fl_br_back.asm：BRANCHZ r4, offset:-2（需 OpLoopMerge 循环 CFG，本批仅前向）
+$ python3 va2spirv.py fl_br_back.bin /tmp/fl_br_back.frag.spv /tmp/fl_br_back.vert.spv
+错误：BRANCHZ 为后向分支（循环），暂不支持 CFG 建模
+exit=2
+
+--- [B2] 区内嵌套分支 ----------------------------------------------------
+# fl_br_nest.asm：外层 BRANCHZ(offset:3) 的区 [4,7) 内含内层 BRANCHZ(offset:1)
+$ python3 va2spirv.py fl_br_nest.bin /tmp/fl_br_nest.frag.spv /tmp/fl_br_nest.vert.spv
+错误：BRANCHZ 区内嵌套分支，暂不支持
+exit=2
+
+--- [B3] 源 combine 非 none（lane select）---------------------------------
+# fl_br_combine.asm：BRANCHZ r4.h0, offset:1（combine=h0，仅建模 none）
+$ python3 va2spirv.py fl_br_combine.bin /tmp/fl_br_combine.frag.spv /tmp/fl_br_combine.vert.spv
+错误：BRANCHZ 带未建模的源修饰（0x001fc02000000104）
+exit=2
+# （src_mod_mask 自动拦截 combine 位域 37-39）
+
+--- [B4] 源为浮点值（非整数比较结果）--------------------------------------
+# fl_br_fsrc.asm：BRANCHZ r5, offset:1（r5 为 FADD 浮点 SSA；比零是整数域语义）
+$ python3 va2spirv.py fl_br_fsrc.bin /tmp/fl_br_fsrc.frag.spv /tmp/fl_br_fsrc.vert.spv
+错误：BRANCHZ 源须为整数比较结果（非整型）
+exit=2
+
+--- [B5] BRANCHZI（间接分支，跳 blend shader）----------------------------
+# fl_br_i.asm：BRANCHZI r4, r5（不在 SUPPORTED）
+$ python3 va2spirv.py fl_br_i.bin /tmp/fl_br_i.frag.spv /tmp/fl_br_i.vert.spv
+错误：不支持的指令 BRANCHZI（P2 子集外）
+exit=2
+
+# 结论：BRANCHZ 所有「未建模分支」（后向/嵌套/combine/浮点源/BRANCHZI）均在
+#       分派前/翻译期被显式拒绝，退出码 2，绝不猜测 CFG 或静默错译。

@@ -1,0 +1,23 @@
+# issue-gold15-bprime-p2-va2spirv —— 失败面（打通过程踩坑实录）
+
+[1] SPIR-V 指令首字编码写反
+  现象：spirv-val 报 "Invalid instruction OpSourceContinued starting at word 5:
+  expected no more operands after 2 words, but stated word count is 17."
+  同时 MoltenVK vkCreateGraphicsPipelines 返回 -3 (VK_ERROR_INITIALIZATION_FAILED)。
+  根因：va2spirv.py 生成器写成 opcode<<16 | wordCount，正确是 wordCount<<16 | opcode。
+  修法：op() 改为 [(wc << 16) | opcode]；vert.spv 即 PASS。
+
+[2] OpFAdd 漏发（frag.spv 引用未定义 %10）
+  现象：spirv-val "ID '10' has not been defined %13 = OpCompositeConstruct ... %10 ..."
+  根因：emit_fadd 把指令存入 self.main_ops，build() 组装函数体时漏接 main_ops。
+  修法：body = list(self.main_ops) + OpCompositeConstruct...。
+
+[3] MoltenVK 1.4.2 空 pipeline layout 段错误
+  现象：EXC_BAD_ACCESS (address=0x30)，MVKPipeline::MVKPipeline + 68 解引用 layout+0x30。
+  根因：VkGraphicsPipelineCreateInfo.layout 未赋值。
+  修法：建空 VkPipelineLayout 并设 gpci.layout。
+
+[4] CPU 参考三角形 y 约定错误（镜像错位）
+  现象：3844/7812 失败像素全为 0,0,0,0（画出的像素颜色本身正确），失败集中在 y>128。
+  根因：参考三角形用 GL 翻转 y=(1-y_ndc)*H/2，Vulkan 实为 fb_y=(y_ndc+1)*H/2。
+  修法：ay/by=0.25H、cy=0.75H。修后失败 0。

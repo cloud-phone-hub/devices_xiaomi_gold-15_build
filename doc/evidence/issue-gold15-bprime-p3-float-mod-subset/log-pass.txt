@@ -1,0 +1,73 @@
+# log-pass —— 浮点源修饰（neg/abs）子集扩充通过记录
+
+日期：2026-10-12  环境：Apple M4 Pro / MoltenVK 1.4.2 / spirv-tools（NDK 29.0.14206865）
+被测源码：out/tmp/p2/frag_mod.asm（7 指令 / 56B）
+
+## 1. 汇编（Mesa asm.py）
+$ python3 deps/mesa/.../valhall/asm.py frag_mod.asm frag_mod.bin
+   -> frag_mod.bin 56B
+
+## 2. 翻译（va2spirv.py，含源修饰位回显）
+$ python3 va2spirv.py frag_mod.bin frag_mod.spv vert_mod.spv ; echo $?
+[00] 0x0091c400000000d1  MOV.i32    dest=reg:4 srcs=[lut:1036831949] flow=0
+[01] 0x0091c600000000d0  MOV.i32    dest=reg:6 srcs=[lut:1065353216] flow=0
+[02] 0x00b2c04000040404  FMA.f32    dest=reg:0 srcs=[reg:4·neg, reg:4, reg:4] flow=0
+[03] 0x00a4c180000004c7  FADD.f32   dest=reg:1 srcs=[lut:3232800912·abs, reg:4] flow=0
+[04] 0x00a4c2400003d206  FMAX.f32   dest=reg:2 srcs=[reg:6·neg, lut:1050868099] flow=0
+[05] 0x0091c300000000d0  MOV.i32    dest=reg:3 srcs=[lut:1065353216] flow=0
+[06] 0x7800c00000000000  NOP        dest=None srcs=[] flow=15
+翻译完成：frag_mod.spv / vert_mod.spv（frag 488B, vert 392B）
+EXIT=0
+# 逐字核对：A.neg（FMA）@01、A.abs（FADD，源=0xC0B0A090=-5.5196）@03、A.neg（FMAX）@04
+
+## 3. SPIR-V 校验（spirv-val）
+$ spirv-val --target-env vulkan1.1 frag_mod.spv   -> VAL_FRAG=PASS
+$ spirv-val --target-env vulkan1.1 vert_mod.spv   -> VAL_VERT=PASS
+
+## 4. 反汇编（spirv-dis）关键行
+%8  = OpExtInstImport "GLSL.std.450"
+%float_0_100000001 = OpConstant %float 0.100000001
+%float_n5_51959991 = OpConstant %float -5.51959991
+%float_1           = OpConstant %float 1
+%float_0_318309873 = OpConstant %float 0.318309873
+%10 = OpFNegate %float %float_0_100000001                 # FMA A.neg
+%11 = OpExtInst %float %8 Fma %10 %float_0_100000001 %float_0_100000001   # FMA
+%13 = OpExtInst %float %8 FAbs %float_n5_51959991         # FADD A.abs
+%14 = OpFAdd %float %13 %float_0_100000001                # FADD
+%16 = OpFNegate %float %float_1                           # FMAX A.neg
+%18 = OpExtInst %float %8 FMax %16 %float_0_318309873     # FMAX
+%21 = OpCompositeConstruct %v4float %11 %14 %18 %float_1
+
+## 5. MoltenVK 逐像素比对（harness）
+$ ./harness frag_mod.spv vert_mod.spv 23 255 81 255 ; echo $?
+逐像素比对：256x256，三角形内 7812 px、外 0 px（边界带跳过），失败 0
+EXIT=0
+
+## 6. 负向对照（证像素确为 (23,255,81,255)）
+$ ./harness frag_mod.spv vert_mod.spv 28 0 255 255
+像素(66,65) 在三角形内但为 23,255,81,255
+像素(67,65) 在三角形内但为 23,255,81,255
+...
+# 三通道均生效：若 A.neg 丢失 r0→28、若 A.abs 丢失 r1→0、若 FMAX A.neg 丢失 r2→255
+
+## 7. 回归（向后兼容）
+$ ./harness frag_sfu.spv vert_sfu.spv 180 5 177 255   -> 失败 0 / EXIT=0
+$ ./harness frag_fma.spv vert_fma.spv 28 0 0 255      -> 失败 0 / EXIT=0
+$ ./harness frag.spv     vert.spv                     -> 失败 0 / EXIT=0   （P2 flat）
+
+## 8. fail-loud 回归（未建模修饰仍被拦截）
+$ python3 va2spirv.py <真机 FMA 0x00b2c20404c08a00>.bin ... ; echo $?
+[00] 0x00b2c20404c08a00  FMA.f32  dest=reg:2 srcs=[reg:0, fau:5·swz1, lut:0·neg] flow=0
+错误：FMA.f32 带未建模的源修饰（0x00b2c20404c08a00）
+EXIT=2
+# 真机带 B.swizzle(h0/h1) 的 FMA 仍被拒绝 → 不会静默错译
+
+## 9. 产物指纹
+frag_mod.bin 56B  md5 bb6a749c267dbbd03513ec57769eda6c
+frag_mod.spv 488B md5 804a55e3b3acf417e034ceb24db4261d
+vert_mod.spv 392B md5 09c8f5fa8ecc6d1dce3c7bcc8f724142
+
+## 10. 语义小结
+- 源修饰位由 ISA 元数据定位：neg = 34+2*(2-i)、abs = 35+2*(2-i)（i=源序 A=0/B=1/C=2）
+- neg -> OpFNegate（=127）；abs -> OpExtInst GLSL.std.450 FAbs（=4）
+- 次序约定 abs 先于 neg（两者同置即 -|x|）

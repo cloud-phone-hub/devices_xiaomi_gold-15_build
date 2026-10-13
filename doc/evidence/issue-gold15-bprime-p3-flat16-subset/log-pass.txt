@@ -1,0 +1,77 @@
+=== CDH gold-15 B′ P3：LD_VAR_BUF_IMM.f16（flat16 片元 varying）建模验证日志（通过面） ===
+环境：Apple M4 Pro / macOS / MoltenVK 1.4.2 / spirv-tools
+
+[1] 全量回归矩阵（run_matrix.py 53/53 PASS）
+[PASS] flat  render exit 0
+[PASS] fma  render exit 0
+[PASS] sfu  render exit 0
+[PASS] mod  render exit 0
+[PASS] vary  render exit 0
+[PASS] vary_v2  render exit 0
+[PASS] vary_v3  render exit 0
+[PASS] vary_real  render exit 0
+[PASS] ialu  render exit 0
+[PASS] ialu_real  render exit 0
+[PASS] shift  render exit 0
+[PASS] shift_neg  render exit 0
+[PASS] shift_real  render exit 0
+[PASS] cmp  render exit 0
+[PASS] cmp_neg  render exit 0
+[PASS] cmp_or  render exit 0
+[PASS] cmp_real  render exit 0
+[PASS] cvt  render exit 0
+[PASS] cvt_real  render exit 0
+[PASS] branch  render exit 0
+[PASS] branch_eq  render exit 0
+[PASS] branch_neg  render exit 0
+[PASS] loop  render exit 0
+[PASS] loop_neg  render exit 0
+[PASS] widen  render exit 0
+[PASS] fau  render exit 0
+[PASS] mem  render exit 0
+[PASS] attr  render exit 0
+[PASS] attr_real  render exit 0
+[PASS] attr_f16  render exit 0
+[PASS] imul_b0  render exit 0
+[PASS] vary_f16  render exit 0
+[PASS] ialu_neg  对照 render exit 1（预期失败）
+[PASS] cvt_neg  对照 render exit 1（预期失败）
+[PASS] mem_neg  对照 render exit 1（预期失败）
+[PASS] attr_neg  对照 render exit 1（预期失败）
+[PASS] imul_b0_neg  对照 render exit 1（预期失败）
+[PASS] vary_f16_neg  对照 render exit 1（预期失败）
+[PASS] fl_br_combine  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_br_fsrc  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_br_i  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_br_nest  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_cmp_cond  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_cmp_csrc  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_cmp_fau  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_cmp_rtype  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_loop_nest  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_widen_res  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_fau_ptr  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_mem_align  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_attr_table  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_ialu_widen  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_vary_srcfmt  翻译 exit 2（预期 fail-loud=2）
+
+合计：53 PASS / 0 FAIL
+
+[2] 离屏逐像素比对测试（harness 渲染，三角形内 7812 px）
+- [vary_f16] (期望 51, 102, 153, 255) -> 7812 px 失败 0，exit 0：
+  逐像素比对：256x256，三角形内 7812 px、外 0 px（边界带跳过），失败 0
+
+[3] 负向对照测试（vary_f16_neg 配错期望 255, 0, 0, 255）
+- [vary_f16_neg] -> 逐像素比对 7812 px 失败，exit 1（精准报出期望与渲染值不符）：
+  像素(66,65) 在三角形内但为 51,102,153,255
+  逐像素比对：256x256，三角形内 7812 px、外 0 px（边界带跳过），失败 7812
+
+[4] 失败拦截守卫测试（fail-loud exit 2）
+- [fl_vary_srcfmt] source_format=2（src_f32 用于 f16 指令）-> 翻译精准拦截 exit 2：
+  错误：LD_VAR_BUF_IMM.f16 翻译失败：LD_VAR_BUF_IMM.f16 仅支持 src_flat16(1)/src_f16(3)，当前 source_format=2
+
+[5] 真机 3 条 LD_VAR_BUF_IMM.f16 指令回环验证（Mesa asm.py 逐位比对）
+- bin-007f00023e80[00]: 0x405d8014310000c0 -> LD_VAR_BUF_IMM.f16.slot0.v4.src_flat16.center.retrieve.wait0126 @r0:r1, 0x0, index:0x0 (100% BIT-MATCH)
+- bin-007f00026e00[02]: 0x005d8414b10000c0 -> LD_VAR_BUF_IMM.f16.slot2.v4.src_flat16.center.retrieve @r4:r5, 0x0, index:0x0 (100% BIT-MATCH)
+- bin-007f00037880[01]: 0x085d8014710000c0 -> LD_VAR_BUF_IMM.f16.slot1.v4.src_flat16.center.retrieve.wait0 @r0:r1, 0x0, index:0x0 (100% BIT-MATCH)

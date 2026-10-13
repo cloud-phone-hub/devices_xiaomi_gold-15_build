@@ -1,0 +1,132 @@
+# log-pass —— LD_VAR_BUF_IMM.f32 插值族（v2/v3 宽度 + centroid/sample + 宽度感知 Location）通过记录
+
+日期：2026-10-12  环境：Apple M4 Pro / MoltenVK 1.4.2 / spirv-tools（NDK 29.0.14206865）
+被测源码：out/tmp/p2/{frag_vary,frag_vary_v2,frag_vary_v3,frag_vary_real}.asm
+
+## 0. 被测源码
+# frag_vary_v2.asm（两个 v2·src_f32·sample，Location 0/1）
+LD_VAR_BUF_IMM.f32.slot0.v2.src_f32.sample.store @r0:r1, r61, index:0x0
+LD_VAR_BUF_IMM.f32.slot1.v2.src_f32.sample.store @r2:r3, r61, index:0x8
+NOP.end
+# frag_vary_v3.asm（v3·src_f32·centroid，Location 0；r3 补 1.0）
+LD_VAR_BUF_IMM.f32.slot0.v3.src_f32.centroid.store @r0:r1:r2, r61, index:0x0
+MOV.i32 r3, 0x3F800000
+NOP.end
+# frag_vary_real.asm（真机字 bin-007f00037880[0] 0x005c82841208003d 直接取材；写 r2:r3）
+LD_VAR_BUF_IMM.f32.slot0.v2.src_f32.sample.store @r2:r3, r61, index:0x8
+MOV.i32 r0, 0x0
+MOV.i32 r1, 0x3F800000
+NOP.end
+
+## 1. 汇编（Mesa asm.py）
+$ python3 deps/mesa/.../valhall/asm.py frag_vary_v2.asm frag_vary_v2.bin
+   -> 24B，字：0x005c80841200003d / 0x005c82845208003d / 0x7800c00000000000
+$ python3 .../asm.py frag_vary_v3.asm frag_vary_v3.bin
+   -> 24B，字：0x005c80462200003d / 0x0091c300000000d0 / 0x7800c00000000000
+$ python3 .../asm.py frag_vary_real.asm frag_vary_real.bin
+   -> 32B，字：0x005c82841208003d / 0x0091c000000000c0 / 0x0091c100000000d0 / 0x7800c00000000000
+# 真机字还原核对：
+$ python3 -c "print(hex(asmb('LD_VAR_BUF_IMM.f32.slot0.v2.src_f32.sample.store @r2:r3, r61, index:0x8')))"
+   0x5c82841208003d  ==  0x005c82841208003d   MATCH   # asm 语义与真机字逐位一致
+
+## 2. 翻译（va2spirv.py，阶段一：静态）
+$ python3 va2spirv.py frag_vary_v2.bin frag_vary_v2.spv vert_vary_v2.spv ; echo $?
+[00] 0x005c80841200003d  LD_VAR_BUF_IMM.f32 dest=None srcs=[reg:61] flow=0
+      meta={'staging_base': 0, 'staging_flags': 128, 'vector_size': 1, 'source_format': 2, 'sample_mode': 2, 'update_mode': 0, 'staging_register_count': 2, 'slot': 0, 'index': 0}
+[01] 0x005c82845208003d  LD_VAR_BUF_IMM.f32 dest=None srcs=[reg:61] flow=0
+      meta={'staging_base': 2, 'staging_flags': 128, 'vector_size': 1, 'source_format': 2, 'sample_mode': 2, 'update_mode': 0, 'staging_register_count': 2, 'slot': 1, 'index': 8}
+[02] 0x7800c00000000000  NOP                dest=None srcs=[] flow=15
+翻译完成：frag_vary_v2.spv / vert_vary_v2.spv（frag 584B, vert 640B）
+EXIT=0
+
+$ python3 va2spirv.py frag_vary_v3.bin frag_vary_v3.spv vert_vary_v3.spv ; echo $?
+[00] 0x005c80462200003d  LD_VAR_BUF_IMM.f32 ... meta={vector_size:2(v3), source_format:2, sample_mode:1(centroid), index:0}
+[01] 0x0091c300000000d0  MOV.i32 dest=reg:3 srcs=[lut:1065353216] flow=0
+[02] 0x7800c00000000000  NOP
+翻译完成：frag_vary_v3.spv / vert_vary_v3.spv（frag 508B, vert 576B）   EXIT=0
+
+$ python3 va2spirv.py frag_vary_real.bin frag_vary_real.spv vert_vary_real.spv ; echo $?
+[00] 0x005c82841208003d  LD_VAR_BUF_IMM.f32 ... meta={staging_base:2, vector_size:1(v2), source_format:2, sample_mode:2(sample), index:8}
+[01] MOV.i32 r0 = lut 0        [02] MOV.i32 r1 = lut 0x3F800000        [03] NOP.end
+翻译完成：frag_vary_real.spv / vert_vary_real.spv（frag 512B, vert 572B）   EXIT=0
+
+## 3. SPIR-V 校验（spirv-val --target-env vulkan1.1）
+frag_vary.spv  frag=PASS  vert=PASS
+frag_vary_v2   frag=PASS  vert=PASS
+frag_vary_v3   frag=PASS  vert=PASS
+frag_vary_real frag=PASS  vert=PASS
+
+## 4. 反汇编（spirv-dis）关键行
+# frag_vary_v2.spv（两个 Input v2float，Location 0/1，均 Sample；能力 SampleRateShading）
+OpCapability Shader
+OpCapability SampleRateShading
+OpEntryPoint Fragment %22 "main" %12 %14 %18
+OpDecorate %14 Location 0
+OpDecorate %14 Sample
+OpDecorate %18 Location 1
+OpDecorate %18 Sample
+%14 = OpVariable %_ptr_Input_v2float Input          # Location 0
+%18 = OpVariable %_ptr_Input_v2float Input          # Location 1
+%15 = OpLoad %v2float %14   %16=Extract 0   %17=Extract 1
+%19 = OpLoad %v2float %18   %20=Extract 0   %21=Extract 1
+# vert_vary_v2.spv（镜像同型 Output v2float，Location 0/1）
+OpEntryPoint Vertex %13 "main" %11 %gl_Position %25 %27
+OpDecorate %25 Location 0    OpDecorate %27 Location 1
+%26 = OpCompositeConstruct %v2float %float_0_200000003 %float_0_400000006   ; (0.2,0.4) → Loc0
+%28 = OpCompositeConstruct %v2float %float_0_400000006 %float_0_600000024   ; (0.4,0.6) → Loc1
+
+# frag_vary_v3.spv（Input v3float，Location 0，Centroid；无 SampleRateShading）
+OpCapability Shader
+OpDecorate %14 Location 0
+OpDecorate %14 Centroid
+%14 = OpVariable %_ptr_Input_v3float Input
+%15 = OpLoad %v3float %14   %16/%17/%18 = Extract 0/1/2
+# vert_vary_v3.spv
+OpEntryPoint Vertex %13 "main" %11 %gl_Position %25
+OpDecorate %25 Location 0
+%25 = OpVariable %_ptr_Output_v3float Output   ; 常量 (0.2,0.4,0.6)
+
+## 5. MoltenVK 逐像素比对（harness，阶段二）
+$ ./harness frag_vary.spv      vert_vary.spv      51 102 153 255   -> 内部 7812 px、失败 0 / EXIT=0
+$ ./harness frag_vary_v2.spv   vert_vary_v2.spv   51 102 102 153   -> 失败 0 / EXIT=0
+$ ./harness frag_vary_v3.spv   vert_vary_v3.spv   51 102 153 255   -> 失败 0 / EXIT=0
+$ ./harness frag_vary_real.spv vert_vary_real.spv  0 255 102 153   -> 失败 0 / EXIT=0
+# 语义：v2=Loc0(0.2,0.4)+Loc1(0.4,0.6) → (51,102,102,153)
+#       v3=Loc0(0.2,0.4,0.6)+r3=1.0   → (51,102,153,255)
+#       real=r0=0.0,r1=1.0, r2:r3=Loc1(0.4,0.6) → (0,255,102,153)
+
+## 6. 负向对照（证用例区分度）
+$ ./harness frag_vary_v2.spv vert_vary_v2.spv 51 102 153 255   像素(66,65)…为 51,102,102,153  EXIT=1
+$ ./harness frag_vary_v2.spv vert_vary_v2.spv 102 51 153 102   像素(66,65)…为 51,102,102,153  EXIT=1
+$ ./harness frag_vary_v3.spv vert_vary_v3.spv 153 102 51 255   像素(66,65)…为 51,102,153,255  EXIT=1
+$ ./harness frag_vary_real.spv vert_vary_real.spv 0 255 51 102 失败 7812 / EXIT=1   # 误映射到 Loc0 的值
+
+## 7. 回归（ALU 三连/常量，新顶点模板向后兼容）
+$ ./harness frag_mod.spv vert_mod.spv 23 255 81 255   -> 失败 0 / EXIT=0
+$ ./harness frag_sfu.spv vert_sfu.spv 180 5 177 255   -> 失败 0 / EXIT=0
+$ ./harness frag_fma.spv vert_fma.spv 28 0 0 255      -> 失败 0 / EXIT=0
+$ ./harness frag_flat.spv vert_flat.spv 255 0 0 255   -> 失败 0 / EXIT=0
+
+## 8. fail-loud 回归（未建模变体，均 exit 2）
+$ python3 va2spirv.py <src_flat32>.bin ... ; echo $?
+错误：LD_VAR_BUF_IMM.f32 翻译失败：仅支持 src_f32（source_format=0）        EXIT=2
+$ python3 va2spirv.py <index=4 非对齐>.bin ... ; echo $?
+错误：LD_VAR_BUF_IMM.f32 翻译失败：index 须按向量宽度对齐（index=4, span=16）  EXIT=2
+$ python3 va2spirv.py <vector_size=none>.bin ... ; echo $?
+错误：LD_VAR_BUF_IMM.f32 翻译失败：仅支持 v2/v3/v4（vector_size=0）           EXIT=2
+
+## 9. 产物指纹（md5）
+frag_vary.bin        16B 64b88d53ba10a85631639d00419c74f3
+frag_vary.spv       500B 181e77d6aa958c8225af33fd2096dc5a
+frag_vary_v2.bin     24B 7f936d44ee7d76845ac3c1ca870e004c
+frag_vary_v2.spv    584B 751f51dbbb90e8500a2e45e3aab0e0dd
+frag_vary_v3.bin     24B 73260b6b6080fc4d2ec8a7af4a09da49
+frag_vary_v3.spv    508B 85adf8d5618c2b6143bb4d761316dc7c
+frag_vary_real.bin   32B 7a158c2f5243292d744544857d5ad05f
+frag_vary_real.spv  512B af6a9c19a6de32b653494ea0913c9d33
+
+## 10. 语义小结
+- comps = vector_size + 1（v2=2/v3=3/v4=4）；Location = index / (comps*4)（取代 v4 专用 /16）
+- sample_mode：center→无修饰；centroid→Centroid(16)；sample→Sample(17)+能力 SampleRateShading(35)
+- src_f32 = 透视校正插值（SPIR-V 默认平滑）；src_flat32/flat16 属 flat 通路，后置
+- 真机字 0x005c82841208003d（v2·src_f32·sample·idx8）→ Location 1，已端到端逐像素可证

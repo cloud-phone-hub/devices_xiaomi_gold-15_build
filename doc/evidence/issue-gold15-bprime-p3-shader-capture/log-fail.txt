@@ -1,0 +1,58 @@
+# issue-gold15-bprime-p3-shader-capture —— 失败面（打通过程踩坑实录，2026-10-12）
+
+[1] 内核工具链误用（根本性问题：编译器与运行内核不一致）
+  现象：直接调用 kernel/build/build-kernel.sh，builder_image 回落到
+        ghcr.io/feicong/droid-ddk:android15-6.6；两轮 v76 构建产出的
+        out/kernel/Image 均为 Android clang 17.0.0、尺寸 32623104 B。
+  风险：本内核 CONFIG_CFI_CLANG=y + CONFIG_SHADOW_CALL_STACK=y，宿主/客机内核
+        须同源编译器；clang17 与运行内核（Ubuntu clang 21.1.8）混用。
+  根因：build-kernel.sh L16 的 CDH_KERNEL_BUILDER 默认值 = ghcr droid-ddk；
+        正确入口 build/scripts/build-kernel.py 会显式注入
+        cloud-phone-hub-ubuntu-builder:latest（Ubuntu clang 21.1.8）。
+  修法：改用 CDH_REFRESH_KERNEL=1 python3 build/scripts/build-kernel.py 全量重建。
+        修后 Image = 32295424 B、Ubuntu clang version 21.1.8（与 v75 运行内核一致）。
+
+[2] .Binary 在 GPU-exec 区，copy_from_user 必失败
+  现象：探针按 ShaderEnv.Shader→ShaderProgram.Binary 拿到指针（0x7f00_xxxx_xxxx），
+        用 copy_from_user 读 128B 一律失败（该区 CPU 侧 PROT_NONE）。
+  根因：GPU-exec 区只有经 kbase 页表映射才可读。
+  修法：改用 kbase_vmap()/kbase_vunmap() 取内核可读指针；挂点选在
+        kbase_jd_submit() 进程上下文（未持锁、可睡眠）。copy_from_user 保留为兜底
+        （P3 code user / P3 code unreadable 计数）= 修后 unreadable 归 0。
+
+[3] chase 指针追踪判据错误（漏报）
+  现象：有界指针追踪打印的候选多而杂，Fragment（stage=2）shader 抓不到。
+  根因：命中判据误用 (word0 & 0xf) == 3；正确应为 Descriptor Type Shader = 8。
+  修法：判据改为 (peek[0] & 0xf) == 8；Stage = (peek[0] >> 4) & 0xf
+        （1=Compute 2=Fragment 3=Vertex），.Binary@+0x08。
+
+[4] chase 命中处只报地址、未 dump 码（Fragment 缺码）
+  现象：P3 chase 打印了地址与 stage，但没有机器码；Fragment 三阶段仍缺。
+  根因：chase 命中分支只 dev_info，未对该 .Binary 做 kbase_vmap dump。
+  修法：在 chase 命中处补 kbase_vmap/kbase_vunmap dump（P3 chase-code，128B）。
+        修后 chase-code 24 命中，补回 3 个 Fragment shader。
+
+[5] 提取器把 chase 的 hexdump 混入 code 块
+  现象：提取出的 bin 长度错乱、拼接重复。
+  根因：P3 chase/chase-code 的 hexdump 与 P3 code vmap 的 hexdump 同前缀
+        （均为 "cdh-mali: OFFSET: HEX"），未做块边界切分。
+  修法：同一地址只取首个完整 dump；遇到其它 "cdh-mali: P3" 标记行即终止当前块。
+
+[6] 译码字节序错误（大量假指令）
+  现象：按小端 <Q 解析 out/tmp/p3/bin-*.bin，UNKNOWN = 12/16，并产出
+        MMUL.v4s8 / CUBEFACE1 等不合常理的指令。
+  根因：print_hex_dump(KERN_INFO, "cdh-mali: ", DUMP_PREFIX_OFFSET, 32, 8, ...)
+        对 8 字节组按 %016llx 格式化 u64 输出——打印的十六进制串即该 u64 的大端表示。
+  修法：改为 struct.unpack_from(">Q", data, i*8) 解析；修后 UNKNOWN = 0/160，
+        指令序列合理（LD_TILE/LD_VAR_BUF_IMM/U16_TO_F32/FMA.f32/BRANCHZ/CLPER 等）。
+
+[7] 路径笔误（误判“实例目录不存在”）
+  现象：在 devices/xiaomi/gold-15 下用相对 out/core/daemon/runtime/... 找不到实例。
+  根因：实例盘路径相对**项目根**（/Volumes/work/cloud-phone-hub/out/core/daemon/runtime/...）。
+  修法：改以项目根为基准定位 runtime/gold-15/<N>/writable-base.qcow2。
+
+[附] 危险操作规避（非失败，但踩过/必须记）
+  - 禁止 adb root：adbd 设计 uid 2000，adb root 后 init 不再自启，通道永久失联。
+  - 禁止 daemon run | head：SIGPIPE 会令 daemon 意外退出；改
+    nohup ... > /tmp/cdh-daemon-runN.log 2>&1 &。
+  - 重启前先停旧实例。

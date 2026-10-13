@@ -1,0 +1,25 @@
+=== CDH gold-15 B′ P3：LD_VAR_BUF_IMM.f16（flat16 片元 varying）建模验证日志（失败面与守卫） ===
+
+[1] 修改前不支持指令拦截现场
+- 现场：未修改前，va2spirv.py 的 SUPPORTED 仅包含 LD_VAR_BUF_IMM.f32，不含 LD_VAR_BUF_IMM.f16；
+  在处理 bin-007f00023e80[00] 等真机字（0x405d8014310000c0）时直接拦截并报错：
+  "错误：不支持的指令 LD_VAR_BUF_IMM.f16（P2 子集外）"（exit 2）。
+- 根因：Valhall 中 LD_VAR_BUF_IMM.f16 具有独立的操作码 0x5D，需独立纳入支持并建模 f16 分量打包写入。
+
+[2] 非法 source_format 显式 fail-loud 拦截（fl_vary_srcfmt）
+- 测试代码：fl_vary_srcfmt.asm（使用 LD_VAR_BUF_IMM.f16.slot0.v4.src_f32.center.retrieve @r0:r1, 0x0, index:0x0，source_format=2）
+- 执行输出：
+  [fl_vary_srcfmt] 翻译 exit 2（预期 fail-loud=2）
+  错误：LD_VAR_BUF_IMM.f16 翻译失败：LD_VAR_BUF_IMM.f16 仅支持 src_flat16(1)/src_f16(3)，当前 source_format=2
+- 验证结论：指令位宽与源格式不匹配被可靠拦截，严防静默错译。
+
+[3] flat varying 采样模式守卫
+- 规则：当 source_format 为 flat（如 src_flat16=1 或 src_flat32=0）时，硬件语义为图元恒定平面着色，不允许附带 sample/centroid 采样位置修饰；若 sample_mode != 0 则立即抛出 ValueError("flat varying 不支持 sample/centroid 采样模式") 并 exit 2。
+
+[4] 负向对照像素比对失败（vary_f16_neg）
+- 测试用例：frag_vary_f16_neg.asm（生成标准 (51, 102, 153, 255) 渲染），在 run_matrix.py 中故意赋予错期望 (255, 0, 0, 255)。
+- 执行输出：
+  像素(66,65) 在三角形内但为 51,102,153,255
+  逐像素比对：256x256，三角形内 7812 px、外 0 px（边界带跳过），失败 7812
+  exit 1
+- 验证结论：离屏逐像素比对具备极高灵敏度，测试通道无假阳性。

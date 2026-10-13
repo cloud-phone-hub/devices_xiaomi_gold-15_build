@@ -1,0 +1,37 @@
+# issue-gold15-bprime-p1-gpuecho —— 通过面记录（run93，2026-10-12）
+# 全部为实测原样输出（host=Apple Silicon，gold-15 guest）。
+
+[1] QEMU cmdline 验证（channels/gpu.sock 就位，hvc11 绑定）
+$ grep -o 'cdh-gpuecho[^ ]*' /proc-like-cmdline(run93)
+  -chardev socket,id=cdh-gpuecho,path=…/runtime/gold-15/93/channels/gpu.sock,server=on,wait=off,logfile=…gpu.sock.log,logappend=on
+  -device virtconsole,chardev=cdh-gpuecho,id=cdh-hvc11-gpuecho
+
+[2] guest 设备就位
+$ adb -s 127.0.0.1:5911 shell 'ls -l /dev/hvc11'
+  crw-rw-rw- 1 system system 229,  11 1970-01-01 00:00 /dev/hvc11
+
+[3] host echo 通道就绪
+  gpuecho_host: …/runtime/gold-15/93/channels/gpu.sock mode=echo
+
+[4] RTT 实测（gpuchan_test /dev/hvc11 2000 0；echo memcmp 校验通过，exit 0）
+  gpuchan_test: dev=/dev/hvc11 iters=2000 tx_bytes=0
+  RTT size=   64 iters=2000 total=   594.3ms avg=0.297ms
+  RTT size= 1024 iters=2000 total=   402.4ms avg=0.201ms
+  RTT size= 4096 iters=2000 total=   756.2ms avg=0.378ms
+  TX  bytes=0 total=0.0ms throughput=0.0MB/s
+
+[5] TX 吞吐实测（host sink 模式；gpuchan_test /dev/hvc11 0 67108864）
+  gpuchan_test: dev=/dev/hvc11 iters=0 tx_bytes=67108864
+  TX  bytes=67108864 total=2540.8ms throughput=25.2MB/s
+
+[6] P1 前置 3 项确认（实测）
+  ① blob/零拷贝：strings qemu-system-aarch64 | grep VIRTIO_GPU_F
+      VIRTIO_GPU_F_CONTEXT_INIT / VIRTIO_GPU_F_RESOURCE_BLOB /
+      VIRTIO_GPU_F_RESOURCE_UUID / VIRTIO_GPU_F_VIRGL        → 全在
+  ② darwin dist libexec/：无 vhost-user-gpu；有 virgl_render_server
+      → 渲染走 virtio-gpu-gl + virgl_render_server（venus→MoltenVK→Metal）
+  ③ cocoa display 无 GL 上下文 → 渲染离屏于 render server，显示走 QEMU scanout
+      → B′ 路线不受影响
+
+# 结论：P1 验收门（链路跑通 + 延迟/带宽实测）通过。
+# RTT 0.2–0.4ms / TX 25.2MB/s（virtconsole tty 上限，非最终数据面约束）。

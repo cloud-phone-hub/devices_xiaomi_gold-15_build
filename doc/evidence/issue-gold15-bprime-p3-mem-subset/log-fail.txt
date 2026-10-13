@@ -1,0 +1,38 @@
+# issue-gold15-bprime-p3-mem-subset —— 失败面/踩坑（2026-10-13）
+
+[1] MoltenVK Argument Buffer 类型元数据缺失（pipeline 创建 -3）
+  现象：在 harness 中加入 StorageBuffer (SSBO) 描述符布局后，
+  vkCreateGraphicsPipelines 报 `[mvk-error] Argument buffer resource base
+  type could not be determined. When padding argument buffer elements, all
+  descriptor set resources must be supplied with a base type by the app.`，
+  返回 -3 (VK_ERROR_INITIALIZATION_FAILED)。
+  根因：MoltenVK 默认开启 Metal argument buffers，在未指定具体反射类型
+  元数据时要求显式提供。
+  修法：在 harness.c 的 main() 首行注入环境变量
+  `setenv("MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS", "0", 1);`，走标准
+  Metal 离散 buffer 绑定通路，免除 argument buffer 元数据约束。
+
+[2] 管道无描述符着色器被无条件 bindDescriptorSets 导致段错误（SIGSEGV -11）
+  现象：harness 加入 `vkCmdBindDescriptorSets` 后，原有的 39 个用例
+  （flat/fma/vary 等未声明 DescriptorSet 0 的着色器）运行时全报 exit -11
+  （EXC_BAD_ACCESS @ libMoltenVK.dylib bindDescriptorSets）。
+  根因：MoltenVK 在管线着色器未声明描述符时，内部 stage descriptor
+  映射数组为 NULL，无条件调用 vkCmdBindDescriptorSets 会触发空指针解引用。
+  修法：在 harness 录制命令前解析 SPIR-V 二进制字流，检查是否存在
+  `OpDecorate ... DescriptorSet(34)`；仅当着色器实际声明了描述符集时才调用
+  `vkCmdBindDescriptorSets`，无描述符用例跳过。既有用例 100% 恢复 PASS。
+
+[3] 内存偏移 16 位有符号与 4 字节对齐
+  现象：imm_off 取值位宽为 16 位，正值最大 0x7FFF，若无符号处理负偏移会越界；
+  同时未对齐访问直接右移 2 位会产生静默数据错位。
+  修法：对 `imm_off >= 0x8000` 执行 `imm_off -= 0x10000` 符号扩展；
+  强制检查 `imm_off % 4 != 0`，未对齐立即抛出 ValueError（fail-loud，
+  对应 `fl_mem_align` exit 2）。
+
+[4] 真机 DDK 编码与 asm.py 汇编语法差异（bit6 reg vs reg_ptr）
+  现象：真机指令中基址寄存器有时为 mode 0（reg: r2），而 asm.py
+  组装 `[r2^:r3^]` 强制产生 mode 1（reg_ptr: r2^，bit6=1），回环比对差 0x40。
+  根因：Mesa asm.py 把 tuple 语法语法糖化为 reg_ptr，但 Valhall 硬件
+  微架构对两者寻址语义一致。
+  修法：va2spirv 解码器中将 reg 与 reg_ptr 统一归一化为基址寄存器号
+  `src_addr.value` 寻址，两者均可正确求出 base_addr。

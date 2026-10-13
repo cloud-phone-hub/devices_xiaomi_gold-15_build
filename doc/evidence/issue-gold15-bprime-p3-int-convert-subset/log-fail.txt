@@ -1,0 +1,72 @@
+# issue-gold15-bprime-p3-int-convert-subset —— 阻塞现场（log-fail）
+
+采集环境：Apple M4 Pro / macOS / MoltenVK 1.4.2；
+spirv 工具：/Users/cuimingqiang/Library/Android/sdk/ndk/29.0.14206865/shader-tools/darwin-x86_64/
+
+---
+
+## 坑 1：OpConvertUToF / OpConvertSToF 常量写反（spirv-val 不报，spirv-dis 露馅）
+
+初版常量：
+    OpConvertUToF, OpConvertSToF = 111, 112   # ← 错
+
+`frag_cvt` 期望 r0 走 U16（无符号）→ 应出 `OpConvertUToF`，
+但 `spirv-dis out_cvt.frag.spv` 显示：
+
+         %22 = OpBitwiseAnd %int %16 %int_65535
+         %23 = OpConvertSToF %float %22        <-- r0(U16) 被译成 SToF
+         %25 = OpBitwiseAnd %int %24 %int_65535
+         %26 = OpConvertSToF %float %25        <-- r1(U16) 被译成 SToF
+         %27 = OpShiftRightArithmetic %int %18 %int_16
+         %28 = OpConvertUToF %float %27        <-- r2(S16) 被译成 UToF
+         %29 = OpShiftRightArithmetic %int %20 %int_16
+         %30 = OpConvertUToF %float %29        <-- r3(S16) 被译成 UToF
+
+注意：此处 **spirv-val 仍然 PASS**（两个 opcode 都合法），只有反汇编能暴露符号方向错。
+根因：SPIR-V 规范 `OpConvertSToF=111`、`OpConvertUToF=112`（与直觉的「U 在前」相反）。
+修复：`OpConvertSToF, OpConvertUToF = 111, 112`，重跑后 `spirv-dis` 显示 r0/r1→`OpConvertUToF`、
+r2/r3→`OpConvertSToF`，符合预期。
+
+教训（并入 gpu.md 编号纪律）：**转换类 opcode 一律用 `spirv-as` 实证，且必须用 `spirv-dis`
+核对符号方向**；`spirv-val` 对「同族但方向错」的 opcode 无感。
+
+## 坑 2：spirv-as 拒绝超范围 int32 字面量（故不用于造二进制）
+
+    $ spirv-as bigc.spvasm -o bigc.spv
+    error: 8: 24: Integer 4294901761 does not fit in a 32-bit signed integer
+
+即 `OpConstant %int 4294901761`（= 0xFFFF0001）无法经 `spirv-as` 组装。
+但**翻译器直出**该二进制字面量后，`spirv-val` **接受**（手工构造模块实测 `VAL_OK`）——
+故 `type_const_bits(bits, "int")` 直嵌 32 位位型可行，无需引入无符号类型。
+
+## 坑 3：真机 `rN^`（mode 1）一度担心语义不同
+
+真机 5 字里源多为 `r8^`/`r59^`/`r0^.h1`（mode 1）。经 Mesa `disasm.py:44-75`
+`bool discard = (type & 1); dmark = discard ? "^" : ""` 确认：`^` 仅「最后使用/可释放」
+活跃性标记，**取值与 `rN` 等同**。翻译器既有 `val_to_ssa`/`emit_mov` 已等同处理，无需特判。
+
+## 坑 4：负向对照（误译应被逐像素揭穿）
+
+把 `frag_cvt` 中 r2 的 `S16_TO_F32` 故意换成 `U16_TO_F32`（`frag_cvt_neg`）：
+
+    $ ./harness out_cvt_neg.frag.spv out_cvt_neg.vert.spv 255 0 0 255
+    像素(66,65) 在三角形内但为 255,0,255,255
+    ...
+    逐像素比对：256x256，三角形内 7812 px、外 0 px（边界带跳过），失败 7812
+    exit=1
+
+同一 shader 用它自身的期望 (255,0,255,255) 则失败 0（exit 0）——证误译确实把 r2 由 0 翻成 255。
+
+## 坑 5：fail-loud 仍须守住
+
+    $ python3 va2spirv.py fl1.bin ...     # IADD_IMM.i32 r0, u0.w0, #1
+    错误：IADD_IMM.i32 翻译失败：暂不支持操作数形态 fau（P2 子集外）
+    exit=2
+
+    $ python3 va2spirv.py fl2.bin ...     # U16_TO_F32 r0, u0.w0
+    错误：U16_TO_F32 翻译失败：暂不支持操作数形态 fau（P2 子集外）
+    exit=2
+
+    $ python3 va2spirv.py fl3.bin ...     # IADD.u32（真机字 0x00a0c40000004a08）
+    错误：不支持的指令 IADD.u32（P2 子集外）
+    exit=2

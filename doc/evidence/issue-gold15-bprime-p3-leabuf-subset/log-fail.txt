@@ -1,0 +1,48 @@
+# issue-gold15-bprime-p3-leabuf-subset —— 失败面与守卫现场（2026-10-13）
+
+## 1. 扩充前阻塞现场（修改前未支持指令）
+
+修改前遇到真机字 0x085e820400000d7b：
+$ python3 va2spirv.py bin-007f00023e00.bin frag.spv vert.spv
+[01] 0x085e820400000d7b  LEA_BUF_IMM        dest=None srcs=[reg_ptr:59] flow=wait0
+      meta={'staging_register_count': 2, 'slot': 0, 'staging_base': 2, 'staging_flags': 128, 'table': 13, 'index': 0}
+错误：不支持的指令 LEA_BUF_IMM（P2 子集外）
+exit 2
+
+## 2. 负向对照渲染现场（lea_buf_neg 错期望）
+
+以错误期望 (0, 0, 0, 0) 运行 harness 对照正例渲染输出（正确色值为 255, 128, 64, 255）：
+$ ./harness lea_buf_neg.frag.spv lea_buf_neg.vert.spv 0 0 0 0
+像素(66,65) 在三角形内但为 255,128,64,255
+像素(67,65) 在三角形内但为 255,128,64,255
+像素(68,65) 在三角形内但为 255,128,64,255
+像素(69,65) 在三角形内但为 255,128,64,255
+像素(70,65) 在三角形内但为 255,128,64,255
+逐像素比对：256x256，三角形内 7812 px、外 0 px（边界带跳过），失败 7812
+exit 1
+
+证实：像素并非假阳性全 0，且 harness 能精确逐像素比对并拦截错误值。
+
+## 3. fail-loud 守卫现场 1：fl_lea_table（未建模的缓冲表 table!=13）
+
+指令：LEA_BUF_IMM.slot0 @r2:r3, r59, table:1, index:0（table=1 为非缓冲表）
+$ python3 /Volumes/work/cloud-phone-hub/deps/mesa/src/panfrost/compiler/bifrost/valhall/asm.py fl_lea_table.asm fl_lea_table.bin
+$ python3 va2spirv.py fl_lea_table.bin fl_lea_table.frag.spv fl_lea_table.vert.spv
+[00] 0x0091fb00000000c0  MOV.i32            dest=reg:59 srcs=[lut:0] flow=none
+[01] 0x005e82040000013b  LEA_BUF_IMM        dest=None srcs=[reg:59] flow=none
+      meta={'staging_register_count': 2, 'slot': 0, 'staging_base': 2, 'staging_flags': 128, 'table': 1, 'index': 0}
+[02] 0x7800c00000000000  NOP                dest=None srcs=[] flow=end
+错误：LEA_BUF_IMM 翻译失败：LEA_BUF_IMM 暂仅支持 table=13（缓冲表），当前 table=1
+exit 2
+
+## 4. fail-loud 守卫现场 2：fl_lea_index（未建模的缓冲索引 index!=0）
+
+指令：LEA_BUF_IMM.slot0 @r2:r3, r59, table:13, index:1（index=1 为非 0 绑定）
+$ python3 /Volumes/work/cloud-phone-hub/deps/mesa/src/panfrost/compiler/bifrost/valhall/asm.py fl_lea_index.asm fl_lea_index.bin
+$ python3 va2spirv.py fl_lea_index.bin fl_lea_index.frag.spv fl_lea_index.vert.spv
+[00] 0x0091fb00000000c0  MOV.i32            dest=reg:59 srcs=[lut:0] flow=none
+[01] 0x005e820400001d3b  LEA_BUF_IMM        dest=None srcs=[reg:59] flow=none
+      meta={'staging_register_count': 2, 'slot': 0, 'staging_base': 2, 'staging_flags': 128, 'table': 13, 'index': 1}
+[02] 0x7800c00000000000  NOP                dest=None srcs=[] flow=end
+错误：LEA_BUF_IMM 翻译失败：LEA_BUF_IMM 暂仅支持 index=0（SSBO binding 0），当前 index=1
+exit 2

@@ -1,0 +1,46 @@
+# issue-gold15-bprime-p3-fma-subset —— 通过面（2026-10-12，MoltenVK 1.4.2 / Apple M4 Pro）
+
+[1] Mesa asm.py 汇编（Valhall → 机器码 48B / 6 指令）
+  00000000: d100 0000 00c4 9100 04d1 0400 00c0 b200
+  00000010: c000 0000 00c1 9100 c000 0000 00c2 9100
+  00000020: d000 0000 00c3 9100 0000 0000 00c0 0078
+  FMA 字 = 0x00b2c0000004d104（opcode 0xb2=178）
+
+[2] va2spirv.py 解码打印
+  [00] 0x0091c400000000d1  MOV.i32    dest=reg:4 srcs=[lut:1036831949] flow=0
+  [01] 0x00b2c0000004d104  FMA.f32    dest=reg:0 srcs=[reg:4, lut:1036831949, reg:4] flow=0
+  [02] 0x0091c100000000c0  MOV.i32    dest=reg:1 srcs=[lut:0] flow=0
+  [03] 0x0091c200000000c0  MOV.i32    dest=reg:2 srcs=[lut:0] flow=0
+  [04] 0x0091c300000000d0  MOV.i32    dest=reg:3 srcs=[lut:1065353216] flow=0
+  [05] 0x7800c00000000000  NOP        dest=None srcs=[] flow=15
+  （1036831949 = 0x3DCCCCCD = 0.1f 位型；1065353216 = 0x3F800000 = 1.0f；flow=15 = end）
+  翻译产物：frag_fma.spv 368B / vert_fma.spv 392B
+
+[3] spirv-val --target-env vulkan1.1
+  frag_fma.spv PASS
+  vert_fma.spv PASS
+
+[4] spirv-dis 反汇编（关键指令）
+  %8 = OpExtInstImport "GLSL.std.450"
+       OpMemoryModel Logical GLSL450
+  %10 = OpExtInst %float %8 Fma %float_0_100000001 %float_0_100000001 %float_0_100000001
+  （三个源都折叠为 0.1f 常量——因 r4 由 0x3DCCCCCD MOV 而来，常量折叠后与 LUT 源同值）
+
+[5] MoltenVK 逐像素比对
+  $ ./harness frag_fma.spv vert_fma.spv 28 0 0 255
+  逐像素比对：256x256，三角形内 7812 px、外 0 px（边界带跳过），失败 0
+  exit 0
+
+  负向对照（故意用错期望）：
+  $ ./harness frag_fma.spv vert_fma.spv 255 0 0 255
+  像素(66,65) 在三角形内但为 28,0,0,255
+  像素(67,65) 在三角形内但为 28,0,0,255
+  ... → 证明内部像素实际为 (28,0,0,255)，即 FMA 结果 = 0.1*0.1+0.1 = 0.11
+
+  P2 flat 回归（默认期望，向后兼容）：
+  $ ./harness frag.spv vert.spv
+  逐像素比对：256x256，三角形内 7812 px、外 0 px（边界带跳过），失败 0
+  exit 0
+
+# 结论：FMA.f32（A×B+C 融合乘加）解码 + → OpExtInst GLSL.std.450 Fma 翻译语义正确，
+#       Metal 侧逐像素可证（28 = round(0.11×255)）；且与误译值 77/3/26 可区分。

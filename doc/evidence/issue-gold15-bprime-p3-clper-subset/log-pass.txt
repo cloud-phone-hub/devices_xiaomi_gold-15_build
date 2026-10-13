@@ -1,0 +1,124 @@
+# issue-gold15-bprime-p3-clper-subset —— 通过面（2026-10-13，MoltenVK 1.4.2 / Apple M4 Pro）
+
+## 1. Mesa asm.py 100% BIT-MATCH 汇编回环验证
+
+真机 3 条 CLPER.i32 指令编码回环：
+- bin-007f00037880[07]: CLPER.i32.subgroup4.zero r3, r2, 0x1000000.b3333 -> 0x00a0c3101c0fc402 [100% BIT-MATCH]
+- bin-007f00037880[08]: CLPER.i32.subgroup4.zero r63, r2, 0x0.b0000 -> 0x00a0ff10100fc002 [100% BIT-MATCH]
+- bin-007f00037880[09]: CLPER.i32.subgroup4.zero.discard r5, r2, 0x3020100.b2222 -> 0x68a0c510180fc802 [100% BIT-MATCH]
+
+## 2. 正例汇编 + 翻译 + 静态校验现场
+
+$ python3 /Volumes/work/cloud-phone-hub/deps/mesa/src/panfrost/compiler/bifrost/valhall/asm.py frag_clper.asm clper.bin
+$ python3 va2spirv.py clper.bin clper.frag.spv clper.vert.spv
+[00] 0x0110c200000002c0  IADD_IMM.i32       dest=reg:2 srcs=[lut:0] flow=none
+      meta={'constant': 2}
+[01] 0x00a0c3101c0fc402  CLPER.i32          dest=reg:3 srcs=[reg:2, lut:16777216] flow=none
+      meta={'subgroup_size': 1, 'lane_operation': 0, 'inactive_result': 0}
+[02] 0x00a0ff10100fc002  CLPER.i32          dest=reg:63 srcs=[reg:2, lut:0] flow=none
+      meta={'subgroup_size': 1, 'lane_operation': 0, 'inactive_result': 0}
+[03] 0x68a0c510180fc802  CLPER.i32          dest=reg:5 srcs=[reg:2, lut:50462976] flow=discard
+      meta={'subgroup_size': 1, 'lane_operation': 0, 'inactive_result': 0}
+[04] 0x0090c00000150003  U16_TO_F32         dest=reg:0 srcs=[reg:3] flow=none
+[05] 0x0091ca00000000d1  MOV.i32            dest=reg:10 srcs=[lut:1036831949] flow=none
+[06] 0x00b2c00000c00a00  FMA.f32            dest=reg:0 srcs=[reg:0, reg:10, lut:0] flow=none
+[07] 0x00a4c10000000000  FADD.f32           dest=reg:1 srcs=[reg:0, reg:0] flow=none
+[08] 0x00a4c20000000001  FADD.f32           dest=reg:2 srcs=[reg:1, reg:0] flow=none
+[09] 0x0091c300000000d0  MOV.i32            dest=reg:3 srcs=[lut:1065353216] flow=none
+[10] 0x7800c00000000000  NOP                dest=None srcs=[] flow=end
+翻译完成：clper.frag.spv / clper.vert.spv（frag 1488B, vert 520B）
+
+$ spirv-val --target-env vulkan1.2 clper.frag.spv
+(PASS, exit 0)
+$ spirv-val --target-env vulkan1.2 clper.vert.spv
+(PASS, exit 0)
+
+## 3. SPIR-V 反汇编抽检（OpGroupNonUniformShuffle 生成）
+
+$ spirv-dis clper.frag.spv
+               OpCapability Shader
+               OpCapability GroupNonUniformShuffle
+         %16 = OpExtInstImport "GLSL.std.450"
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint Fragment %66 "main" %15
+...
+         %20 = OpIAdd %int %int_0 %int_2
+               OpStore %21 %20
+         %22 = OpLoad %int %21
+         %26 = OpGroupNonUniformShuffle %int %uint_3 %22 %uint_1
+               OpStore %27 %26
+         %28 = OpLoad %int %21
+         %30 = OpGroupNonUniformShuffle %int %uint_3 %28 %uint_0
+               OpStore %31 %30
+         %32 = OpLoad %int %21
+         %34 = OpGroupNonUniformShuffle %int %uint_3 %32 %uint_2
+               OpStore %35 %34
+
+## 4. MoltenVK 离屏逐像素比对现场
+
+$ ./harness clper.frag.spv clper.vert.spv 51 102 153 255
+逐像素比对：256x256，三角形内 7812 px、外 0 px（边界带跳过），失败 0
+(exit 0)
+
+## 5. 全量回归矩阵（57 项全 PASS）
+
+$ python3 run_matrix.py
+[PASS] flat  render exit 0
+[PASS] fma  render exit 0
+[PASS] sfu  render exit 0
+[PASS] mod  render exit 0
+[PASS] vary  render exit 0
+[PASS] vary_v2  render exit 0
+[PASS] vary_v3  render exit 0
+[PASS] vary_real  render exit 0
+[PASS] ialu  render exit 0
+[PASS] ialu_real  render exit 0
+[PASS] shift  render exit 0
+[PASS] shift_neg  render exit 0
+[PASS] shift_real  render exit 0
+[PASS] cmp  render exit 0
+[PASS] cmp_neg  render exit 0
+[PASS] cmp_or  render exit 0
+[PASS] cmp_real  render exit 0
+[PASS] cvt  render exit 0
+[PASS] cvt_real  render exit 0
+[PASS] branch  render exit 0
+[PASS] branch_eq  render exit 0
+[PASS] branch_neg  render exit 0
+[PASS] loop  render exit 0
+[PASS] loop_neg  render exit 0
+[PASS] widen  render exit 0
+[PASS] fau  render exit 0
+[PASS] mem  render exit 0
+[PASS] attr  render exit 0
+[PASS] attr_real  render exit 0
+[PASS] attr_f16  render exit 0
+[PASS] imul_b0  render exit 0
+[PASS] vary_f16  render exit 0
+[PASS] clper  render exit 0
+[PASS] ialu_neg  对照 render exit 1（预期失败）
+[PASS] cvt_neg  对照 render exit 1（预期失败）
+[PASS] mem_neg  对照 render exit 1（预期失败）
+[PASS] attr_neg  对照 render exit 1（预期失败）
+[PASS] imul_b0_neg  对照 render exit 1（预期失败）
+[PASS] vary_f16_neg  对照 render exit 1（预期失败）
+[PASS] clper_neg  对照 render exit 1（预期失败）
+[PASS] fl_br_combine  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_br_fsrc  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_br_i  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_br_nest  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_cmp_cond  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_cmp_csrc  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_cmp_fau  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_cmp_rtype  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_loop_nest  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_widen_res  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_fau_ptr  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_mem_align  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_attr_table  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_ialu_widen  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_vary_srcfmt  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_clper_op  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_clper_widen  翻译 exit 2（预期 fail-loud=2）
+
+合计：57 PASS / 0 FAIL

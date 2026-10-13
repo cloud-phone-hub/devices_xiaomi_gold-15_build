@@ -1,0 +1,53 @@
+# log-pass —— SFU 浮点三连（FRSQ/FRCP/FMAX）扩充通过记录
+
+日期：2026-10-12  环境：Apple M4 Pro / MoltenVK 1.4.2 / spirv-tools（NDK 29.0.14206865）
+
+## 1. 汇编（Mesa asm.py）
+$ python3 deps/mesa/.../valhall/asm.py frag_sfu.asm frag_sfu.bin
+   -> frag_sfu.bin 48B  md5 a8d5a265ba6da92e9f5b49122da2eae1
+
+## 2. 翻译（va2spirv.py）
+$ python3 va2spirv.py frag_sfu.bin frag_sfu.spv vert_sfu.spv ; echo $?
+[00] 0x0091c400000000dc  MOV.i32  dest=reg:4 srcs=[lut:1073741824]
+[01] 0x009cc00000020004  FRSQ.f32 dest=reg:0 srcs=[reg:4]
+[02] 0x009cc100000000df  FRCP.f32 dest=reg:1 srcs=[lut:1112014848]      # 0x42480000=50.0
+[03] 0x00a4c2000003d3d1  FMAX.f32 dest=reg:2 srcs=[lut:1036831949, lut:1060205080]  # 0.1f, ln2
+[04] 0x0091c300000000d0  MOV.i32  dest=reg:3 srcs=[lut:1065353216]      # 0x3F800000=1.0
+[05] 0x7800c00000000000  NOP      flow=15
+翻译完成：frag_sfu.spv / vert_sfu.spv（frag 440B, vert 392B）
+EXIT=0
+
+## 3. SPIR-V 校验（spirv-val）
+$ spirv-val --target-env vulkan1.1 frag_sfu.spv   -> PASS
+$ spirv-val --target-env vulkan1.1 vert_sfu.spv   -> PASS
+
+## 4. 反汇编（spirv-dis）关键行
+%float_2 = OpConstant %float 2
+%float_1 = OpConstant %float 1
+%float_50 = OpConstant %float 50
+%float_0_100000001 = OpConstant %float 0.100000001
+%float_0_693147182 = OpConstant %float 0.693147182
+%10 = OpExtInst %float %8 InverseSqrt %float_2          # FRSQ.f32
+%13 = OpFDiv   %float %float_1 %float_50                 # FRCP.f32 = 1/50
+%16 = OpExtInst %float %8 FMax %float_0_100000001 %float_0_693147182   # FMAX.f32
+%19 = OpCompositeConstruct %v4float %10 %13 %16 %float_1
+
+## 5. MoltenVK 逐像素比对（harness）
+$ ./harness frag_sfu.spv vert_sfu.spv 180 5 177 255 ; echo $?
+逐像素比对：256x256，三角形内 7812 px、外 0 px（边界带跳过），失败 0
+EXIT=0
+
+## 6. 负向对照（证像素确为 (180,5,177,255)）
+$ ./harness frag_sfu.spv vert_sfu.spv 255 0 0 255
+像素(66,65) 在三角形内但为 180,5,177,255
+像素(67,65) 在三角形内但为 180,5,177,255
+...
+
+## 7. 回归（向后兼容）
+$ ./harness frag_fma.spv vert_fma.spv 28 0 0 255    -> 失败 0 / EXIT=0
+$ ./harness frag.spv   vert.spv                      -> 失败 0 / EXIT=0   （P2 flat，默认期望 255）
+
+## 8. 指令语义小结
+- FRSQ.f32  -> GLSL.std.450 InverseSqrt（=32）
+- FRCP.f32  -> OpFDiv(1.0, x)（=136；GLSL 无 Recip）
+- FMAX.f32  -> GLSL.std.450 FMax（=40）

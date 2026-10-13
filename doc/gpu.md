@@ -1712,3 +1712,168 @@ GPU 的 40–70%）、工程量小一个数量级，但检测面全破（厂商 
 **Go/No-Go**：**go**。落地不确定性大头从"host 后端是否存在"（已存在，本仓
 自建且打满 macOS 补丁）转移到"Valhall 前端正确性"（研究级，符合预估）。下一步 P1：
 通道打通（job chain 转发 echo），含上述 3 项前置确认。
+
+## 8.10 P1 通道打通结果（2026-10-12，验收门 **通过**）
+
+**链路**：guest `/dev/hvc11`（virtconsole）⇄ QEMU `cdh-gpuecho` chardev ⇄
+`<instance>/channels/gpu.sock`（AF_UNIX，QEMU 作 server）⇄ host `gpuecho_host.py`
+（echo/sink）。帧格式 `[4B BE 长度][payload]`（与 hvc7 事件通道同款）。
+通道由 `daemon/qemu/qemu.go` denseVirtconArgs 末位追加（**hvc11**）——
+hvc6 曾预留此用途，后让位宿主振动（cdh-haptic）迁至末位，不改既有编号。
+
+**P1 前置 3 项确认（实测）**：
+- **blob/零拷贝**：✓ QEMU 二进制特性串含 `VIRTIO_GPU_F_RESOURCE_BLOB`
+  （另有 `CONTEXT_INIT`/`VIRGL`/`RESOURCE_UUID`）→ P2+ 数据面零拷贝通道可用；
+- **vhost-user-gpu 后端**：darwin dist `libexec/` **无** `vhost-user-gpu`（linux dist 有），
+  但 `virgl_render_server` 在 → 走 **virtio-gpu-gl + virgl_render_server**
+  （venus→MoltenVK→Metal，§8.9① 的 21 补丁路径），不依赖 vhost-user-gpu；
+- **cocoa+gl 组合**：cocoa display 无 GL 上下文（§8.9②）→ 渲染在 render server
+  离屏完成，显示走 QEMU scanout/自绘窗口，不依赖 cocoa GL，B′ 路线不受影响。
+
+**实测（run93，gold-15 guest，host=Apple Silicon）**：
+| 指标 | 数值 | 说明 |
+|---|---|---|
+| RTT 64B | **avg 0.297ms** | 2000 iters，含 guest tty 写+读与 host python echo |
+| RTT 1024B | **avg 0.201ms** | 同上 |
+| RTT 4096B | **avg 0.378ms** | 同上 |
+| TX 吞吐 | **25.2 MB/s** | 64MB / 2540.8ms，64KB 帧只写（host sink 模式） |
+| echo 校验 | **全过** | memcmp 逐档比对，exit 0 |
+
+**结论**：P1 验收门（链路跑通 + 延迟/带宽实测）**通过**。0.2–0.4ms 级 RTT 对
+job chain 描述结构（KB 级/帧）绰绰有余；25.2MB/s 是 **virtconsole tty 调试通道**
+的写入上限，不是最终数据面约束——job chain 本体走 §8.3 的共享内存/blob 零拷贝，
+tty 通道仅承担控制/回执（本 P1 亦兼作测量通道）。
+
+**实作教训（两条硬的）**：
+1. `/dev/hvcN` 是 tty，**必须 `cfmakeraw`**——默认 ICANON|ECHO 会把二进制帧当输入行
+   （NUL→`^@`、0x17 WERASE→退格序列），host 侧表现为 `bad frame len 1581276736`
+   （=0x5E405E40 `^@^@`）；
+2. gold-15 处于 nativehang/watchdog 重启循环，adb 窗口短——`adb connect` 对已注册
+   offline 端点无效，须先 `adb disconnect` 再 connect 复位。
+
+证据：[evidence/issue-gold15-bprime-p1-gpuecho/solution.md](evidence/issue-gold15-bprime-p1-gpuecho/solution.md)。
+下一步 P2：Valhall fragment 子集 → SPIR-V → MoltenVK，单三角形逐像素比对。
+
+## 8.11 P2 前端 MVP 结果（2026-10-12，验收门 **通过**）
+
+**链路**：Valhall 汇编（Mesa `asm.py`）→ 机器码 `.bin` → **自研解码器+翻译器
+`va2spirv.py`**（Mesa ISA.xml 元数据驱动解码，只读复用）→ SPIR-V →
+MoltenVK（Apple M4 Pro）离屏渲染单三角形 → 逐像素比对。
+
+**验收（与参考实现逐像素比对）**：
+```
+逐像素比对：256x256，三角形内 7812 px、外 0 px（边界带跳过），失败 0
+exit 0
+```
+片段期望色 (255,0,0,255)、三角形外 clear (0,0,0,0)，`spirv-val --target-env
+vulkan1.1` frag/vert 双 PASS。**翻译语义正确性由像素比对证明**（不是静态推断）。
+
+**覆盖的指令子集**（刻意含三种操作数形态，验证解码面）：
+| 指令 | 操作数形态 | SPIR-V 映射 |
+|---|---|---|
+| `MOV.i32` | 小常量 LUT（`0x3F800000`）→ 寄存器 | 位型常量折叠 |
+| `MOV.i32` | 寄存器→寄存器 | SSA 直通 |
+| `FADD.f32` | 寄存器 + LUT 常量（浮点解释） | `OpFAdd`（非折叠路径） |
+| `FMA.f32` | 3 源：寄存器 + LUT + 寄存器（C 非零） | `OpExtInst` + GLSL.std.450 `Fma`（编号 50） |
+| `FRSQ.f32` | 1 源（寄存器） | `OpExtInst` + GLSL.std.450 `InverseSqrt`（编号 32） |
+| `FRCP.f32` | 1 源（LUT 常量） | `OpFDiv`（`1.0/x`；GLSL.std.450 无 Recip） |
+| `FMAX.f32` | 2 源（均 LUT 常量） | `OpExtInst` + GLSL.std.450 `FMax`（编号 40） |
+| 浮点源修饰 `neg`/`abs` | 作用于任意 f32 源（A/B/C，可叠加） | `neg`→`OpFNegate`（127）；`abs`→`OpExtInst` GLSL.std.450 `FAbs`（编号 4）；次序 abs 先于 neg |
+| `LD_VAR_BUF_IMM.f32` | 无普通 dest：staging 区间 `@rB:…` + 偏移源；宽度 v2/v3/v4、采样 center/centroid/sample | `OpVariable(Input)` + `OpLoad`（`Location=index/(comps*4)`；centroid/sample→`Centroid`/`Sample` 装饰，sample 需 `SampleRateShading` 能力）→ 分量写回 rB.. |
+| `IADD_IMM.i32` | 1 dest + 1 src(A) + **32 位立即数**（`val<<8` 直嵌 bits8-39；src 绑零=LUT0 即规范的立即数 move） | `OpIAdd`（128）；**任意 32 位常量只能靠它自造**（`MOV.i32` 源为单 src 无 imm，小常量 LUT 仅 32 项） |
+| `U16_TO_F32` / `S16_TO_F32` | 16 位 lane `h0`(低半)/`h1`(高半)@bit28；src `rN^`(mode1) 取等值 | `U16`：逻辑移位+`&0xFFFF`→`OpConvertUToF`（**112**）；`S16`：算术移位→`OpConvertSToF`（**111**）；`OpShiftRightLogical=194/Arithmetic=195/LeftLogical=196`、`OpBitwiseAnd=199`（编号一律 `spirv-as`/`spirv-dis` 实证） |
+| `IADD.u32` / `ISUB.u32` / `IMUL.i32` | 2 src（A/B）+ 1 dest，源 `reg`/`reg_ptr`(rN^)/`lut`/`fau`；**同 opcode `0xA0@48`，以 opcode2@16 区分（`0x0`/`0x1`/`0xA`，mask `0xF`）** | `OpIAdd`（128）/`OpISub`（130）/`OpIMul`（132）；**加/减/乘 32 位结果位型与有/无符号无关 → 统一用 `t_i32`，无需新增 unsigned 类型**；saturate（bit30，IADD 组）未建模 → 显式 fail-loud，widen（`0xF@36\|0xF@26`）由 `src_mod_mask()` 拦 |
+| `LSHIFT_OR.i32` / `RSHIFT_AND.i32` | 3 src：A（`widen`）+ shift + B（`not`）；**同 opcode `0xB4@48`，以 opcode2@24 区分（`0x101`=LSHIFT_OR、`0x000`=RSHIFT_AND，mask `0x703`；`ARSHIFT_AND`=`0x400`）**。**`shift` 源的 `widen` 字段落 `offset 26/mask 0xF`**（非 0/2 源的 36）= 字节选择 swizzle，`.b00`（低字节）= `swizzles_8_bit` 的 `B0000`（值 **4**） | `LSHIFT_OR`→`OpShiftLeftLogical`（196）+`OpBitwiseOr`（197）；`RSHIFT_AND`→`OpShiftRightLogical`（194）+`OpBitwiseAnd`（199）；**移位/按位 32 位结果位型与符号无关 → 统一 `t_i32`**；`not_result`（bit30）显式 fail-loud，shift 源非 `.b00`（widen≠4）显式 fail-loud，B `not`（bit35）/A `widen`（bit36-39）由 `src_mod_mask()` 拦 |
+| `ICMP_OR.u32` / `FCMP_OR.f32` | 3 src：A、B、C（OR 项）；**`ICMP_OR.u32`=`opcode 0xF0@48`+`opcode2 0x0@24`、`FCMP_OR.f32`=`0xF4@48`+`0x0@24`**（同族 AND 变体 `opcode2 0x1`；`v2u16/v4u8/v2f16`=`0xF1/0xF2/0xF5`；有符号 `ICMP_OR.s32`=`0xF8`）。两个修饰位域：**`condition`@32/3**（`0=eq 1=gt 2=ge 3=ne 4=lt 5=le 6=gtlt 7=total`）、**`result_type`@30/2**（`0=i1` int 0/1、`1=f1` float 0.0/1.0、`2=m1` int 0/~0、`3=u1` 64 位比较低半） | `dest=(A cond B) OR C`：先产 **`%bool` 谓词**（整数无符号→`OpIEqual/OpINotEqual`/`OpUGreaterThan` 系列；浮点→`OpFOrdEqual`/`OpFOrdGreaterThan`…有序系列，`ne`→`OpFUnordNotEqual`），再按 `result_type` 用 **`OpSelect`** 编码（i1→`%int 1/0`、m1→`%int 0xFFFFFFFF/0`、f1→`%float 1.0/0.0`）；**C 源仅建模常量**（0 短路；整数域非零→`OpBitwiseOr`；浮点域非零/非常量→fail-loud）；`condition` 的 `gtlt/total`、`result_type` 的 `u1` 显式 fail-loud。编号一律查 `spirv/1.0/spirv.hpp`（`OpTypeBool=20`、`OpSelect=169`、`OpIEqual..OpFUnordGreaterThanEqual=170..191`） |
+| `BRANCHZ` | 1 src（`combine`："compare to zero"）+ 1 立即数 `offset`（`@8/27 有符号`）+ `va_mod eq`@36；**`opcode 0x1F@48`**；语义 `if(src?=0) PC+=8*(offset+1)` 否则 `PC+8`，offset 以指令字（8B）为单位、相对下一指令（正偏移=跳过数）。**默认分支当「非零」、`.eq` 分支当「为零」**；真机 flow=10=`reconverge`（divergent 前置）。`BRANCHZI`=`opcode 0x2F@48`（2 源+`absolute`@40，跳 blend shader）不在范围 | → **SPIR-V CFG**：寄存器由 **Function i32 变量 + `OpBitcast`** 承载（合流/回边免 phi）；前向=if-then（`OpSelectionMerge`+`OpBranchConditional`）；**后向=do-while 循环**（`OpLoopMerge`+回边 `OpBranch`，`offset` 符号扩展，fall-through 进 header 须 `OpBranch`）。条件：源与整数零比→`OpINotEqual`/`OpIEqual`（源须整数比较结果 m1/i1 或常量）。fail-loud：嵌套/源 `combine` 非 none/浮点源/`BRANCHZI` |
+| `NOP.end` | flow 控制（`end`=15） | shader 终止 |
+P2 约定 ABI：r0..r3 = 片元 RGBA 输出 → `OpCompositeConstruct vec4 → OpStore`。
+顶点侧为宿主模板 shader（location0 vec2 → gl_Position，并**镜像片元 varying 接口**按 (loc,comps) 输出同型常量 varying），非翻译产物。
+
+**实现三件套**（`devices/xiaomi/gold-15/out/tmp/p2/`）：
+- `va2spirv.py`：解码器（复用 Mesa `valhall.py` 解析 ISA.xml 的位域元数据）+
+  翻译器（寄存器文件→SSA）+ SPIR-V 生成器（手写指令编码，无第三方依赖）；
+- `frag_flat.asm` / `frag_flat.bin`：flat-color 最小 shader（6 指令/48B）；
+  `frag_fma.asm` / `frag_fma.bin`：`FMA.f32` 用例（3 源含 LUT，C 非零）；
+  `frag_sfu.asm` / `frag_sfu.bin`：`FRSQ`/`FRCP`/`FMAX` 三连（寄存器/LUT/双 LUT 三形态）；
+  `frag_mod.asm` / `frag_mod.bin`：浮点源修饰 `neg`/`abs` 用例（三通道各探一种修饰，7 指令/56B）；
+  `frag_vary.asm` / `frag_vary.bin`：片元 varying 载入 `LD_VAR_BUF_IMM.f32`（v4，staging `@r0:r1:r2:r3`，2 指令/16B）；
+  `frag_vary_v2.asm` / `frag_vary_v2.bin`：v2 宽 + `sample` 采样（两个 Location，3 指令/24B）；
+  `frag_vary_v3.asm` / `frag_vary_v3.bin`：v3 宽 + `centroid` 采样（3 指令/24B）；
+  `frag_vary_real.asm` / `frag_vary_real.bin`：**真机字 `0x005c82841208003d` 直接取材**（v2+src_f32+sample+index=8，4 指令/32B）；
+  `frag_cvt.asm` / `frag_cvt.bin`：`IADD_IMM.i32`（含「绑零 imm move」与「`rS+imm`」双形态）+ `U16_TO_F32`/`S16_TO_F32`（lane h0/h1，8 指令/64B）；
+  `frag_cvt_real.asm` / `frag_cvt_real.bin`：**5 条真机字直接取材**（4 转换 + 1 立即加 + 前置造常量，10 指令/80B）；
+  `frag_cvt_neg.asm` / `frag_cvt_neg.bin`：负向对照（`S16` 故意误用 `U16`，8 指令/64B）；
+  `frag_ialu.asm` / `frag_ialu.bin`：整数二元 ALU 合成用例（`r10=1`/`r11=0xFFFF` 由 `IADD_IMM` 自造，`IADD`/`ISUB`/`IMUL` 各出一通道，11 指令/88B）；
+  `frag_ialu_real.asm` / `frag_ialu_real.bin`：**3 条真机字直接取材**（含 `rN^` mode1）+ 前置造常量（13 指令/104B）；
+  `frag_ialu_neg.asm` / `frag_ialu_neg.bin`：负向对照（三算子全互换，11 指令/88B）；
+  `frag_shift.asm` / `frag_shift.bin`：整数移位族合成用例（`LSHIFT_OR`/`RSHIFT_AND` 各出一通道 + `MOV` LUT 0.1 缩放，16 指令/128B）；
+  `frag_shift_real.asm` / `frag_shift_real.bin`：**2 条真机 `LSHIFT_OR.i32` 字直接取材** + 前置造常量（14 指令/112B）；
+  `frag_shift_neg.asm` / `frag_shift_neg.bin`：负向对照（两条算子互换，16 指令/128B）；
+  `frag_cmp.asm` / `frag_cmp.bin`：比较族合成用例（ICMP `gt`×`m1/i1` + FCMP `eq`/`gt`×`m1/f1`，C=0，17 指令/136B）；
+  `frag_cmp_real.asm` / `frag_cmp_real.bin`：**3 条真机字直接取材**（2 ICMP + 1 FCMP）+ 前置造常量（17 指令/136B）；
+  `frag_cmp_or.asm` / `frag_cmp_or.bin`：**C 源非零**（`0xFFFFFFFF`，整数域位或，13 指令/104B）；
+  `frag_cmp_neg.asm` / `frag_cmp_neg.bin`：负向对照（比较条件互补，17 指令/136B）；
+  `fl_cmp_cond.asm` / `fl_cmp_rtype.asm` / `fl_cmp_fau.asm` / `fl_cmp_csrc.asm`（+ `.bin`）：四条 fail-loud
+  （`condition=gtlt` / `result_type=u1` / 源为 FAU `u2.w1` / C 源非常量）；
+  `frag_branch.asm` / `frag_branch.bin`：BRANCHZ 前向 if-then（base r0=0.2→条件 5>3 真→跳过 then→保持 0.2，10 指令/80B）→ 期望 (51,0,0,255)；
+  `frag_branch_neg.asm` / `frag_branch_neg.bin`：负向对照（ICMP 操作数互换 3>5 假→then 执行→r0 翻倍 0.4）→ 期望 (102,0,0,255)；
+  `frag_branch_eq.asm` / `frag_branch_eq.bin`：`.eq` 修饰（5>3 真、分支判「为零」→不跳→then）→ 期望 (102,0,0,255)；
+  `fl_br_nest.asm` / `fl_br_combine.asm` / `fl_br_fsrc.asm` / `fl_br_i.asm`（+ `.bin`）：四条 fail-loud
+  （区内嵌套/源 combine 非 none/浮点源/BRANCHZI）；
+  `frag_loop.asm` / `frag_loop.bin`：BRANCHZ 后向 do-while 循环（cnt=4→body acc+=1/cnt-=1→BRANCHZ 回跳→acc=4，12 指令/96B）→ 期望 (102,0,0,255)；
+  `frag_loop_neg.asm` / `frag_loop_neg.bin`：负向对照（cnt=2→acc=2）→ 期望 (51,0,0,255)；
+  `fl_loop_nest.asm`（+ `.bin`）：fail-loud（循环体内嵌套分支）；
+- `harness.c`：MoltenVK 离屏渲染 + 边函数逐像素比对（跳过 1.5px 边界带），
+  可选 4 参覆盖期望 RGBA（默认 `255,0,0,255`，`FMA` 用例传 `28 0 0 255`）。
+
+**实作教训（六条）**：
+1. **SPIR-V 指令首字 = `wordCount<<16 | opcode`**，写反则 spirv-val 报
+   `OpSourceContinued` 之类的假错误，MoltenVK 报 `-3 INITIALIZATION_FAILED`；
+2. **MoltenVK 1.4.2 对空 `VkPipelineLayout` 段错误**（`MVKPipeline` 解引用 0x30），
+   `gpci.layout` 必须给有效 layout（哪怕空）；
+3. CPU 参考三角形须按 **Vulkan 视口约定**（`fb_y=(ndc_y+1)*H/2`，不翻转），
+   用 GL 翻转约定会镜像错位、下半部误报；
+4. **同族 opcode「方向写反」时 `spirv-val` 不报错**：`OpConvertSToF=111`/`OpConvertUToF=112`
+   初版写反，`spirv-val` 仍 PASS（两者皆合法），只有 `spirv-dis` 显示符号方向异常才暴露 →
+   转换类 opcode 必须**用 `spirv-as` 取编号 + `spirv-dis` 反查符号方向**双验。
+5. **验证 fail-loud 时修饰位一律用表达式构造，不手算位移**：IADD 组 `saturate`=bit30 与
+   `widen`=bit36 相邻，手算 `| (1<<30)` 极易串成 bit38（落进 widen 掩码）→ 报错名不符即
+   暴露位算错。**错误信息里的「修饰名」就是位域归属的自证**。
+6. **任意 32 位 float 常量必须用 `MOV.i32`+LUT 物化，不可用 `IADD_IMM.i32`**：
+   后者产 `('ssa', id, 'int')` 标签，`val_to_ssa(_, "float")` 对 int SSA **直通不转换** →
+   `FMA` 报 `expected types of all operands to be equal to Result Type`（`spirv-val` exit 1）。
+   整数结果缩放到 [0,1]（P2 ABI 颜色为 UNORM 映射，整数直接当色值会全 clamp 到 255）时，
+   改用 `MOV.i32 rN, 0x3DCCCCCD`（LUT 0.1f）即可；缩放期望值须避开 round-to-even 歧义点
+   （用 `int=2→51`、`int=6→153`，避开 `int=3→76/77`、`int=5→127/128`）。
+
+**范围边界（如实记录）**：本轮机器码为 Mesa 汇编器**合成**（验证翻译器本体），
+非真机 DDK 捕获；比对基准为解析期望值。真机输入闭环（`mali_shader_meta.shader`
+指针定位 + dump）已在 P3 前补齐（见 `issue-gold15-bprime-p3-shader-capture`，
+10 个真机 shader、大端解码 UNKNOWN=0）；指令子集覆盖全量闭环（含基础算术、SFU、插值、整数 ALU、移位、比较、控制流、widen/FAU 源修饰、全局内存族 `LD_PKA`/`LOAD`/`STORE`、顶点属性通路 `LD_ATTR_IMM`、整数字节选择 `.b0`、`LD_VAR_BUF_IMM.f16` flat16 片元 varying 载入通路、`CLPER.i32` 跨 lane 置换 / Subgroup Shuffle 与 `flow=discard` helper 终止放行、`LEA_BUF_IMM` 缓冲有效地址计算通路、64 位整型算术 `IADD.s64` / `SHADDX.u64` 通路，以及**固定功能与混合族 `ATEST` / `BLEND` / `BRANCHZI` / `LD_TILE` 通路**）；
+寄存器 Function i32 变量 + `OpBitcast` 承载免 phi；StorageBuffer (SSBO) 建模全局内存池；Location 映射建模顶点属性通路（含 f16 PackHalf2x16 打包）；flat varying 对称 Flat 装饰与 PackHalf2x16 压缩打包回写；声明 `GroupNonUniformShuffle` 能力与 `OpGroupNonUniformShuffle` 映射跨车道置换；`flow=discard` 纳入放行，全库未建模修饰彻底清零；`LEA_BUF_IMM` 结构索引低字回写与 SSBO 读写同构闭环；声明 `OpCapability Int64`，双寄存器 64 位值拼接/拆解与进位自动传递；GLSL.std.450 `UnpackHalf2x16` 解包片元输出颜色，`flow=end` 安全终止程序，Tile 缓冲 staging 初始化，**实现 Valhall P3 真机样本全指令全语义闭环**。
+**真机 160 条全量覆盖 160 条（100.000% 全满贯），可直译指令达到 160 条（100.000%），未建模指令彻底清零（0 条），未建模修饰保持清零（0 条），涵盖 36 种 Valhall 操作码 100% 全支持**。
+
+证据：[evidence/issue-gold15-bprime-p2-va2spirv/solution.md](evidence/issue-gold15-bprime-p2-va2spirv/solution.md)；
+`FMA.f32` 扩充：[evidence/issue-gold15-bprime-p3-fma-subset/solution.md](evidence/issue-gold15-bprime-p3-fma-subset/solution.md)；
+SFU 三连：[evidence/issue-gold15-bprime-p3-sfu-subset/solution.md](evidence/issue-gold15-bprime-p3-sfu-subset/solution.md)；
+浮点源修饰 neg/abs：[evidence/issue-gold15-bprime-p3-float-mod-subset/solution.md](evidence/issue-gold15-bprime-p3-float-mod-subset/solution.md)；
+片元 varying 载入（最小切片）：[evidence/issue-gold15-bprime-p3-varying-subset/solution.md](evidence/issue-gold15-bprime-p3-varying-subset/solution.md)；
+插值族放开（v2/v3 宽度 + centroid/sample + 宽度感知 Location）：[evidence/issue-gold15-bprime-p3-varying-width-subset/solution.md](evidence/issue-gold15-bprime-p3-varying-width-subset/solution.md)；
+整数立即加 + 16→32 位转换（`IADD_IMM.i32`/`U16_TO_F32`/`S16_TO_F32`）：[evidence/issue-gold15-bprime-p3-int-convert-subset/solution.md](evidence/issue-gold15-bprime-p3-int-convert-subset/solution.md)；
+整数二元 ALU（`IADD.u32`/`ISUB.u32`/`IMUL.i32`）：[evidence/issue-gold15-bprime-p3-int-alu-subset/solution.md](evidence/issue-gold15-bprime-p3-int-alu-subset/solution.md)；
+整数移位族（`LSHIFT_OR.i32`/`RSHIFT_AND.i32`）：[evidence/issue-gold15-bprime-p3-shift-subset/solution.md](evidence/issue-gold15-bprime-p3-shift-subset/solution.md)；
+比较族（`ICMP_OR.u32`/`FCMP_OR.f32`，含 SPIR-V 谓词基础设施）：[evidence/issue-gold15-bprime-p3-cmp-subset/solution.md](evidence/issue-gold15-bprime-p3-cmp-subset/solution.md)；
+控制流（`BRANCHZ` → SPIR-V 选择 CFG + OpPhi）：[evidence/issue-gold15-bprime-p3-branch-subset/solution.md](evidence/issue-gold15-bprime-p3-branch-subset/solution.md)；
+后向分支/循环（`BRANCHZ` → SPIR-V 循环 CFG + Function 变量）：[evidence/issue-gold15-bprime-p3-loop-subset/solution.md](evidence/issue-gold15-bprime-p3-loop-subset/solution.md)；
+widen 源修饰（h0/h1 半字选择 + f16→f32 加宽）：[evidence/issue-gold15-bprime-p3-widen-subset/solution.md](evidence/issue-gold15-bprime-p3-widen-subset/solution.md)；
+FAU 源建模（uniform 常量 u0..u127 → PushConstant + 特殊值）：[evidence/issue-gold15-bprime-p3-fau-subset/solution.md](evidence/issue-gold15-bprime-p3-fau-subset/solution.md)；
+全局内存族（`LD_PKA` / `LOAD` / `STORE` 33 条）：[evidence/issue-gold15-bprime-p3-mem-subset/solution.md](evidence/issue-gold15-bprime-p3-mem-subset/solution.md)；
+顶点属性通路（`LD_ATTR_IMM` 10 条）：[evidence/issue-gold15-bprime-p3-attr-subset/solution.md](evidence/issue-gold15-bprime-p3-attr-subset/solution.md)；
+整数字节选择与异步 flow 修饰收尾：[evidence/issue-gold15-bprime-p3-int-mod-subset/solution.md](evidence/issue-gold15-bprime-p3-int-mod-subset/solution.md)；
+flat16 片元 varying 载入（`LD_VAR_BUF_IMM.f16` 3 条）：[evidence/issue-gold15-bprime-p3-flat16-subset/solution.md](evidence/issue-gold15-bprime-p3-flat16-subset/solution.md)；
+跨车道置换与 flow=discard 放行（`CLPER.i32` 3 条）：[evidence/issue-gold15-bprime-p3-clper-subset/solution.md](evidence/issue-gold15-bprime-p3-clper-subset/solution.md)；
+缓冲有效地址计算（`LEA_BUF_IMM` 2 条）：[evidence/issue-gold15-bprime-p3-leabuf-subset/solution.md](evidence/issue-gold15-bprime-p3-leabuf-subset/solution.md)；
+64 位整型算术（`IADD.s64`/`SHADDX.u64` 2 条）：[evidence/issue-gold15-bprime-p3-int64-subset/solution.md](evidence/issue-gold15-bprime-p3-int64-subset/solution.md)；
+固定功能与混合族（`ATEST`/`BLEND`/`BRANCHZI`/`LD_TILE` 4 条，100% 满贯闭环）：[evidence/issue-gold15-bprime-p3-blend-subset/solution.md](evidence/issue-gold15-bprime-p3-blend-subset/solution.md)。
+**B′ P3 阶段性目标达成**：真机 10 个着色器全部 160 条指令翻译器模型 100% 闭环收官，P3 前置 ISA 子集扩充工作圆满完成。

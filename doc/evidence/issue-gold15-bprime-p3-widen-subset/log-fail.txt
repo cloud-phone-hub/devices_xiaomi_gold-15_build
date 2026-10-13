@@ -1,0 +1,17 @@
+# issue-gold15-bprime-p3-widen-subset —— 失败面（踩坑实录）
+
+[1] 编码回环首试 dest 位不符
+  现象：`FMA.f32 r11, r11, 0x38000000.h1, 0x0.neg` 产出 0x00b2cb0408c0da0b，
+  真机 0x00b2f80408c0da0b（dest 字节 cb vs f8）。
+  根因：照 A 源猜了 dest，实际解码 dest=r56（wrmask=3 → 0x38|0xC0=0xF8）。
+  修正：以 decode_word 的 dest 为准（r56/r59）→ 2/2 逐位命中。
+
+[2] valhall.py 同进程二次解析 ISA 撞全局断言
+  现象：同进程既 import va2spirv 又 import asm，valhall_parse_isa 二次执行，
+  指令表重复追加 → AssertionError + "XXX appeared 2 times" 刷屏。
+  修正：asm.py 回环与 va2spirv 解码分进程执行。
+
+[3] reserved 码构造面
+  `Widen` 枚举的 reserved 值无名可写，但 asm.py 对枚举修饰用 bare_values.index()
+  解析 → `.reserved` 命中首个 reserved（索引 3）可编码 swizzle=3 → 用作
+  fl_widen_res 负例；4–7 无法经汇编构造，仅 mod_val 代码层拦截。

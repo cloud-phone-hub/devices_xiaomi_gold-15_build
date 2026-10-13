@@ -1,0 +1,100 @@
+=== CDH gold-15 B′ P3：LD_ATTR_IMM 顶点属性通路建模验证日志（通过面） ===
+环境：Apple M4 Pro / macOS / MoltenVK 1.4.2 / spirv-tools
+
+[1] 全量回归矩阵（run_matrix.py 47/47 PASS）
+[PASS] flat  render exit 0
+[PASS] fma  render exit 0
+[PASS] sfu  render exit 0
+[PASS] mod  render exit 0
+[PASS] vary  render exit 0
+[PASS] vary_v2  render exit 0
+[PASS] vary_v3  render exit 0
+[PASS] vary_real  render exit 0
+[PASS] ialu  render exit 0
+[PASS] ialu_real  render exit 0
+[PASS] shift  render exit 0
+[PASS] shift_neg  render exit 0
+[PASS] shift_real  render exit 0
+[PASS] cmp  render exit 0
+[PASS] cmp_neg  render exit 0
+[PASS] cmp_or  render exit 0
+[PASS] cmp_real  render exit 0
+[PASS] cvt  render exit 0
+[PASS] cvt_real  render exit 0
+[PASS] branch  render exit 0
+[PASS] branch_eq  render exit 0
+[PASS] branch_neg  render exit 0
+[PASS] loop  render exit 0
+[PASS] loop_neg  render exit 0
+[PASS] widen  render exit 0
+[PASS] fau  render exit 0
+[PASS] mem  render exit 0
+[PASS] attr  render exit 0
+[PASS] attr_real  render exit 0
+[PASS] attr_f16  render exit 0
+[PASS] ialu_neg  对照 render exit 1（预期失败）
+[PASS] cvt_neg  对照 render exit 1（预期失败）
+[PASS] mem_neg  对照 render exit 1（预期失败）
+[PASS] attr_neg  对照 render exit 1（预期失败）
+[PASS] fl_br_combine  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_br_fsrc  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_br_i  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_br_nest  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_cmp_cond  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_cmp_csrc  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_cmp_fau  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_cmp_rtype  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_loop_nest  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_widen_res  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_fau_ptr  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_mem_align  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_attr_table  翻译 exit 2（预期 fail-loud=2）
+
+合计：47 PASS / 0 FAIL
+
+[2] 离屏逐像素比对测试（harness 渲染，三角形内 7812 px）
+- [attr] (期望 51, 102, 153, 255) -> 7812 px 失败 0，exit 0
+- [attr_real] (期望 102, 153, 255, 51) -> 7812 px 失败 0，exit 0
+- [attr_f16] (期望 102, 153, 255, 51) -> 7812 px 失败 0，exit 0
+
+[3] 负向对照测试（attr_neg 配错期望 255, 0, 0, 255）
+- [attr_neg] -> 逐像素比对 7812 px 失败，exit 1（精准报出期望与渲染值不符）
+
+[4] 失败拦截守卫测试（fail-loud exit 2）
+- [fl_attr_table] table:0x2（非属性表 table=1）-> 翻译精准拦截 exit 2：
+  "错误：LD_ATTR_IMM 翻译失败：LD_ATTR_IMM 仅支持 table=1（属性表），当前 table=2"
+
+[5] 真机 10 条 LD_ATTR_IMM 指令回环验证（Mesa asm.py 逐位比对）
+- bin-007f00023e00[00]: 0066800433117d7c -> LD_ATTR_IMM.v4.f16.slot0 @r0:r1, r60^, r61^, index:0x1, table:0x1 (100% BIT-MATCH)
+- bin-007f00032e80[00]: 0066800412017d7c -> LD_ATTR_IMM.v2.f32.slot0 @r0:r1, r60^, r61^, index:0x0, table:0x1 (100% BIT-MATCH)
+- bin-007f00034180[00]: 0066800832513d3c -> LD_ATTR_IMM.v4.f32.slot0 @r0:r1:r2:r3, r60, r61, index:0x5, table:0x1 (100% BIT-MATCH)
+- bin-007f00034180[01]: 0066b00872013d3c -> LD_ATTR_IMM.v4.f32.slot1 @r48:r49:r50:r51, r60, r61, index:0x0, table:0x1 (100% BIT-MATCH)
+- bin-007f00034180[02]: 0066b40872413d3c -> LD_ATTR_IMM.v4.f32.slot1 @r52:r53:r54:r55, r60, r61, index:0x4, table:0x1 (100% BIT-MATCH)
+- bin-007f00034180[07]: 00668408b2113d3c -> LD_ATTR_IMM.v4.f32.slot2 @r4:r5:r6:r7, r60, r61, index:0x1, table:0x1 (100% BIT-MATCH)
+- bin-007f00037380[00]: 0066840832513d3c -> LD_ATTR_IMM.v4.f32.slot0 @r4:r5:r6:r7, r60, r61, index:0x5, table:0x1 (100% BIT-MATCH)
+- bin-007f00037380[01]: 0066b00872013d3c -> LD_ATTR_IMM.v4.f32.slot1 @r48:r49:r50:r51, r60, r61, index:0x0, table:0x1 (100% BIT-MATCH)
+- bin-007f00037380[02]: 0066b40872413d3c -> LD_ATTR_IMM.v4.f32.slot1 @r52:r53:r54:r55, r60, r61, index:0x4, table:0x1 (100% BIT-MATCH)
+- bin-007f00037380[03]: 00668808b2113d3c -> LD_ATTR_IMM.v4.f32.slot2 @r8:r9:r10:r11, r60, r61, index:0x1, table:0x1 (100% BIT-MATCH)
+结论：全部 10/10 条真机顶点属性指令 100% 逐位吻合。
+
+[6] 真机 160 字覆盖率重算（out/tmp/p3-decode-be.txt，同口径：
+    decode_word + SUPPORTED + src_mod_mask + 源形态检查）
+
+| 指标 | 上批基线（内存族） | 本批（LD_ATTR_IMM） | 变化 |
+|---|---|---|---|
+| 不支持指令 | 24 | **14** | **-10（LD_ATTR_IMM 全部清零）** |
+| 可直译指令 | 107 | **113** | **+6** |
+| 未建模修饰 | 29 | **33** | +4（真机 slot 等异步标志） |
+| 源形态不支持 | 0 | **0** | 保持清零 |
+| 覆盖率 (160-不支持)/160 | 85.0% | **91.25%** | **+6.25% 跃升突破 90% 大关** |
+
+剩余 14 条不支持指令明细：
+- LD_VAR_BUF_IMM.f16: 3
+- CLPER.i32: 3
+- LEA_BUF_IMM: 2
+- IADD.s64: 1
+- ATEST: 1
+- BLEND: 1
+- BRANCHZI: 1
+- LD_TILE: 1
+- SHADDX.u64: 1

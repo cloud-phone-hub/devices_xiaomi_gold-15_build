@@ -1,0 +1,131 @@
+# issue-gold15-bprime-p3-leabuf-subset —— 通过面（2026-10-13，MoltenVK 1.4.2 / Apple M4 Pro）
+
+## 1. Mesa asm.py 100% BIT-MATCH 汇编回环验证
+
+真机 2 条 LEA_BUF_IMM 指令编码回环：
+- bin-007f00023e00[01]: LEA_BUF_IMM.slot0.wait0 @r2:r3, r59^, table:13, index:0 -> 0x085e820400000d7b [100% BIT-MATCH]
+- bin-007f00032e80[01]: LEA_BUF_IMM.slot1.wait0 @r4:r5, r59^, table:13, index:0 -> 0x085e840440000d7b [100% BIT-MATCH]
+
+## 2. 正例汇编 + 翻译 + 静态校验现场
+
+$ python3 /Volumes/work/cloud-phone-hub/deps/mesa/src/panfrost/compiler/bifrost/valhall/asm.py frag_lea_buf.asm lea_buf.bin
+$ python3 va2spirv.py lea_buf.bin lea_buf.frag.spv lea_buf.vert.spv
+[00] 0x0091fb00000000c0  MOV.i32            dest=reg:59 srcs=[lut:0] flow=none
+[01] 0x085e820400000d7b  LEA_BUF_IMM        dest=None srcs=[reg_ptr:59] flow=wait0
+      meta={'staging_register_count': 2, 'slot': 0, 'staging_base': 2, 'staging_flags': 128, 'table': 13, 'index': 0}
+[02] 0x085e840440000d7b  LEA_BUF_IMM        dest=None srcs=[reg_ptr:59] flow=wait0
+      meta={'staging_register_count': 2, 'slot': 1, 'staging_base': 4, 'staging_flags': 128, 'table': 13, 'index': 0}
+[03] 0x006080f428000042  LOAD.i64           dest=None srcs=[reg_ptr:2] flow=none
+      meta={'staging_register_count': 2, 'slot': 0, 'staging_base': 0, 'staging_flags': 128, 'offset': 0}
+[04] 0x0060828218000844  LOAD.i32           dest=None srcs=[reg_ptr:4] flow=none
+      meta={'staging_register_count': 1, 'slot': 0, 'staging_base': 2, 'staging_flags': 128, 'offset': 8}
+[05] 0x0060838218001044  LOAD.i32           dest=None srcs=[reg_ptr:4] flow=none
+      meta={'staging_register_count': 1, 'slot': 0, 'staging_base': 3, 'staging_flags': 128, 'offset': 16}
+[06] 0x7800c00000000000  NOP                dest=None srcs=[] flow=end
+翻译完成：lea_buf.frag.spv / lea_buf.vert.spv（frag 1352B, vert 520B）
+
+$ spirv-val --target-env vulkan1.2 lea_buf.frag.spv
+(PASS, exit 0)
+$ spirv-val --target-env vulkan1.2 lea_buf.vert.spv
+(PASS, exit 0)
+
+## 3. SPIR-V 反汇编抽检（OpTypeStruct SSBO 与有效基址寄存器赋值）
+
+$ spirv-dis lea_buf.frag.spv
+               OpCapability Shader
+         %16 = OpExtInstImport "GLSL.std.450"
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint Fragment %54 "main" %15 %24
+               OpExecutionMode %54 OriginUpperLeft
+               OpDecorate %_runtimearr_int ArrayStride 4
+               OpDecorate %_struct_21 Block
+               OpMemberDecorate %_struct_21 0 Offset 0
+               OpDecorate %24 DescriptorSet 0
+               OpDecorate %24 Binding 0
+               OpDecorate %15 Location 0
+...
+         %25 = OpLoad %int %18
+               OpStore %26 %25
+               OpStore %27 %int_0
+         %28 = OpLoad %int %18
+               OpStore %29 %28
+               OpStore %30 %int_0
+         %31 = OpLoad %int %26
+         %33 = OpShiftRightLogical %int %31 %int_2
+         %34 = OpAccessChain %_ptr_StorageBuffer_int %24 %int_0 %33
+         %35 = OpLoad %int %34
+               OpStore %36 %35
+...
+
+## 4. MoltenVK 离屏逐像素比对现场
+
+$ ./harness lea_buf.frag.spv lea_buf.vert.spv 255 128 64 255
+逐像素比对：256x256，三角形内 7812 px、外 0 px（边界带跳过），失败 0
+exit 0
+
+## 5. 全量回归测试矩阵（run_matrix.py）
+
+$ python3 run_matrix.py
+[PASS] flat  render exit 0
+[PASS] fma  render exit 0
+[PASS] sfu  render exit 0
+[PASS] mod  render exit 0
+[PASS] vary  render exit 0
+[PASS] vary_v2  render exit 0
+[PASS] vary_v3  render exit 0
+[PASS] vary_real  render exit 0
+[PASS] ialu  render exit 0
+[PASS] ialu_real  render exit 0
+[PASS] shift  render exit 0
+[PASS] shift_neg  render exit 0
+[PASS] shift_real  render exit 0
+[PASS] cmp  render exit 0
+[PASS] cmp_neg  render exit 0
+[PASS] cmp_or  render exit 0
+[PASS] cmp_real  render exit 0
+[PASS] cvt  render exit 0
+[PASS] cvt_real  render exit 0
+[PASS] branch  render exit 0
+[PASS] branch_eq  render exit 0
+[PASS] branch_neg  render exit 0
+[PASS] loop  render exit 0
+[PASS] loop_neg  render exit 0
+[PASS] widen  render exit 0
+[PASS] fau  render exit 0
+[PASS] mem  render exit 0
+[PASS] attr  render exit 0
+[PASS] attr_real  render exit 0
+[PASS] attr_f16  render exit 0
+[PASS] imul_b0  render exit 0
+[PASS] vary_f16  render exit 0
+[PASS] clper  render exit 0
+[PASS] lea_buf  render exit 0
+[PASS] ialu_neg  对照 render exit 1（预期失败）
+[PASS] cvt_neg  对照 render exit 1（预期失败）
+[PASS] mem_neg  对照 render exit 1（预期失败）
+[PASS] attr_neg  对照 render exit 1（预期失败）
+[PASS] imul_b0_neg  对照 render exit 1（预期失败）
+[PASS] vary_f16_neg  对照 render exit 1（预期失败）
+[PASS] clper_neg  对照 render exit 1（预期失败）
+[PASS] lea_buf_neg  对照 render exit 1（预期失败）
+[PASS] fl_br_combine  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_br_fsrc  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_br_i  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_br_nest  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_cmp_cond  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_cmp_csrc  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_cmp_fau  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_cmp_rtype  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_loop_nest  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_widen_res  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_fau_ptr  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_mem_align  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_attr_table  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_ialu_widen  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_vary_srcfmt  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_clper_op  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_clper_widen  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_lea_table  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_lea_index  翻译 exit 2（预期 fail-loud=2）
+
+合计：61 PASS / 0 FAIL
