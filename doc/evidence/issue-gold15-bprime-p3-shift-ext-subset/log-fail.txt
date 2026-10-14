@@ -1,0 +1,16 @@
+# log-fail.txt —— 失败面/拦截面留档（2026-10-13，issue-gold15-bprime-p3-shift-ext-subset）
+
+## 1. fail-loud 负例拦截（预期 exit 2）
+[fl_shift16_swz] rc=2  错误：LSHIFT_AND.v2i16 翻译失败：v2i16 源 swizzle 码 4 未建模（仅 h00/h10/h01/h11）
+[fl_shift64_widen] rc=2  错误：LSHIFT_XOR.i64 翻译失败：64 位操作数暂仅支持 none 或 .w0 (widen=4)
+[fl_shift64_lut] rc=2  错误：LSHIFT_OR.i64 翻译失败：i64 移位族 LUT 非零常量扩展未建模
+[fl_rot_notres] rc=2  错误：LROT_OR.i32 翻译失败：带未建模的 not_result 修饰（0x00b4c40351c00b0a）
+[fl_rot_shiftsel] rc=2  错误：LROT_OR.i32 翻译失败：i32/i64 移位量 lane 码 2 未建模（仅 b0..b3）
+
+## 2. 错误实现对照（以正例期望 255,255,255,255 跑 harness 必须失败）
+[rot_neg] harness rc=1（预期 1）  像素(66,65) 在三角形内但为 255,0,255,255
+[shift_ext_neg] harness rc=1（预期 1）  像素(66,65) 在三角形内但为 255,0,255,255
+
+## 3. 真机样本扫描（本批形态出现情况）
+10 个重捕真机 shader（E2E 语料）全部可译 = 无 v2i16/i64 移位族与 rotate 形态；
+rotate 亦不在 valhall ISA.xml（仅 kraid isa-v9-v14.xml）→ 本批为编码空间前瞻补齐，真机字回环以字段表推导 + 解码回环代替 asm.py 回环。

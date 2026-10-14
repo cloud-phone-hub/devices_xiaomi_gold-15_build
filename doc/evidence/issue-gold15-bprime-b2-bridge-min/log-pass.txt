@@ -1,0 +1,29 @@
+# log-pass.txt —— 通过面留档（2026-10-14，issue-gold15-bprime-b2-bridge-min）
+
+## 1. B2 桥四段管道贯通（guest 内核 → helper → hvc11 → host 渲染服务）
+- 内核侧（wire-kbase.sh (28a-k)/(28h)/(28j) + bridge/cdh_gpumbox.c）：
+  shader 捕获**双路命中实证**（run106 qemu.log）：
+  `B2 bridge shader cache-hit jc=0x5effb02400 len=48`（Tiler atom 捕获缓存路）
+  `B2 bridge shader seed=0x5effadc100 off=+0xe8 jc=... len=64`（payload/FBD BFS 直指路，
+  +0xe8 = (19) chase 实证位，两路与 P3 探针逐条吻合）
+  `B2 bridge q seq=N rt=0x... 1080x2400 blk=12/13 shader=48B/64B` ×30（入队判据）
+- mailbox：`/proc/cdh_gpumbox` 0666（procfs 权限直达，`ls -l` 实证；misc 被
+  ueventd 重置 0600 是 run102 的堵点，/proc/ged 先例照抄）
+- helper（gpumbox_bridge，NDK 静态 aarch64）：读 mailbox → 组 GR01 帧 → hvc11
+  （cfmakeraw）→ 实证转发 3 帧（seq=9/10/11）
+- host 渲染服务（gpurender_host.py）：**收到真实 GR01 并解析全对**（rt/w/h/blk
+  与内核 q 行逐字段一致 = 线格式三端对称定案）：
+  `[gpurender] seq=9 rt=0x5effd26000 640x576 blk=13 渲染失败：va2spirv exit 2:
+   错误：不支持的指令 TEX_SINGLE（P2 子集外）`（seq=10 同 TEX_SINGLE、
+   seq=11 = VAR_TEX_BUF_SINGLE）
+
+## 2. host 渲染服务离线自测（oneshot）
+- frag_flat.bin 造 GR01 请求 → RP01 status=0 + 256x256 像素 262144B：
+  三角形内 ff0000ff、外 00000000（与 harness 期望一致）
+- harness 新增 `--dump` 像素导出模式（回归零破坏：run_matrix 95/95 全绿）
+
+## 3. 语义取证（Tiler DCD 定案）
+- (19) 注释 + run100/106 双实证：**fragment shader 落 Tiler Job 的 DCD**
+  （job 缓冲 +0xe8 直指 Shader Program），FS atom 为单 type=9 job 链、链上追不到
+  → (28j) Tiler atom 捕获缓存（同 tgid、2s 有效）+ (28h-c) payload/FBD BFS 兜底，
+  两路在 run106 均有命中日志

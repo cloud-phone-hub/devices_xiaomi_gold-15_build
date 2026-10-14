@@ -1,0 +1,17 @@
+# log-fail.txt —— 失败面/拦截面留档（2026-10-13，issue-gold15-bprime-p3-shift-mod-subset）
+
+## 1. 错误实现对照（以正例期望 255,255,255,255 跑 harness 必须失败）
+[shift_mod_neg] harness rc=1（预期 1）  像素(66,65) 在三角形内但为 255,0,255,255
+
+## 2. 正例错期望负向对照（逐像素报真值）
+像素(66,65) 在三角形内但为 255,255,255,255
+像素(67,65) 在三角形内但为 255,255,255,255
+
+## 3. 语义反转说明（非拦截项）
+fl_shift_and_notres / fl_bytevec_notres / fl_rot_notres 三例随 not_result 放开语义反转为正例
+shift_notres/bytevec_notres/rot_notres（既有 89 基线中它们为 fail-loud 项，本批移出 FAIL_LOUD）
+
+## 4. fail-loud 边界（本批放开后仍拦的）
+not_result/B 源 not 仅存在于移位/旋转族（valhall ISA.xml not="true" 6 处全在移位组，
+not_result 为移位组 group 修饰）→ 无「非移位族带修饰」可构造负例（asm.py 亦无对应助记符）；
+src_mod_mask 仍对非移位族保留 not 拦截（豁免条件限 SHIFT_I32|SHIFT_EXT），防御未来合成指令。

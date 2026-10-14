@@ -1,0 +1,24 @@
+# log-pass.txt —— 通过面留档（2026-10-13，issue-gold15-bprime-p3-stage-output-abi）
+
+## 1. 输出形态取证（10 真机样本尾部指令）
+Compute（01000/c900/06c80）：尾部 STORE.*（SSBO 写出）/BRANCHZI → 输出=内存写，无接口输出；
+Vertex（32e80/23e00/37380/34180）：尾部 STORE.i128/i64（flow=end）→ 位置/varying 经 STORE 写输出缓冲；
+Fragment（26e00/23e80/37880）：尾部 BLEND+ATEST → 颜色写回 r0..r3（现状 ABI）。
+
+## 2. 真机样本按阶段生成 + spirv-val
+01000 compute VAL PASS（GLCompute+LocalSize，无输出接口）
+23e00 vertex VAL PASS（Vertex+占位 Position）
+
+## 3. 矩阵 VAL_ONLY 用例（compute_store 无 r0..r3 / vtx_store 属性+地址+STORE）
+[PASS] compute_store  val-only（stage=compute）
+[PASS] vtx_store  val-only（stage=vertex）
+
+
+## 4. 全量回归矩阵（连跑 2 次稳定性）
+合计：95 PASS / 0 FAIL
+合计：95 PASS / 0 FAIL
+
+## 5. E2E stage 驱动端到端
+[OK]   bin-007f00037880 (fragment)  translate OK + val PASS
+
+E2E 总分：10/10 可译 + val PASS（另 0 个=记账：可译性未达标但原因已列明，不掩盖）

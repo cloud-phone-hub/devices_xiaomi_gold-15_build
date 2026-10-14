@@ -1,0 +1,32 @@
+# CDH gold-15 B′ P3 真机 shader E2E —— 基线阻塞现场（2026-10-13，预置寄存器未建模）
+# 复现：cd devices/xiaomi/gold-15/out/tmp/p2 && for f in e2e/bin-*.le.bin; do
+#         python3 va2spirv.py $f /tmp/x.frag.spv /tmp/x.vert.spv
+#       done
+# 说明：e2e/bin-*.le.bin = 真机捕获 shader（dmesg 大端转写已转 LE），10 个，各 128B/16 字。
+#       va2spirv.py 为改动前版本（无 r56..r63 入口预置）。
+# 结果：4/10 OK + 5 个「r未定义即被读取」+ 1 个「BRANCHZ 目标越界」（捕获截断）。
+
+$ python3 run_matrix.py（改动前既有基线，blend-subset 收官态）
+合计：69 PASS / 0 FAIL   （逐字覆盖 160/160，run_matrix 69/69 全绿）
+
+$ 逐样本 va2spirv → spirv-val --target-env vulkan1.2（改动前）
+bin-007f00001000  rc=0  val=PASS
+bin-007f00006c80  rc=2  val=-   错误：IMUL.i32 翻译失败：r57 未定义即被读取
+bin-007f0000c900  rc=0  val=PASS
+bin-007f00023e00  rc=2  val=-   错误：LEA_BUF_IMM 翻译失败：r59 未定义即被读取
+bin-007f00023e80  rc=0  val=PASS
+bin-007f00026e00  rc=2  val=-   错误：RSHIFT_AND.i32 翻译失败：r61 未定义即被读取
+bin-007f00032e80  rc=2  val=-   错误：LEA_BUF_IMM 翻译失败：r59 未定义即被读取
+bin-007f00034180  rc=0  val=PASS
+bin-007f00037380  rc=2  val=-   错误：MOV.i32 翻译失败：r59 未定义即被读取
+bin-007f00037880  rc=2  val=-   错误：BRANCHZ 目标越界（index=19, end=15）
+                                警告：未见 flow=end 终止指令
+
+# 基线分数：4/10（bin-007f00001000 / 00c900 / 023e80 / 034180）
+# 5 个 r未定义 = 缺口 A（入口预置寄存器 ABI 缺失）：
+#   06c80 读 r57 / 23e00 读 r59 / 26e00 读 r61 / 32e80 读 r59 / 37380 读 r59
+# 1 个 BRANCHZ 越界 = 缺口 B（捕获探针每个 shader 只 dump 前 128B，真机 shader 更长，
+#   分支跳出 16 字窗口即流被截断的实证；37880 index=19 > end=15）。
+#
+# 另：字节序缝隙——p3/bin-*.bin 为 dmesg 大端转写（须 >Q 读），asm.py 产物为 LE；
+#     e2e/bin-*.le.bin 已是转换后的 LE 版，本 E2E 直接用（见遗留④）。

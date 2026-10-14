@@ -1,0 +1,26 @@
+# log-pass.txt —— 通过面留档（2026-10-13，issue-gold15-bprime-p3-shift-mod-subset）
+
+## 1. asm.py 编码回环（4 条真机形态字，B 源 .not / .not_result 修饰）
+asm rc: 0 
+  0x00b4c409500c0b0a  not_result(bit30)=True  B.not(bit35)=True
+  0x00b6c409400c0b0a  not_result(bit30)=True  B.not(bit35)=True
+  0x01b7c60812571654  not_result(bit30)=False  B.not(bit35)=True
+  0x00b5c529400f0e0d  not_result(bit30)=True  B.not(bit35)=True
+
+## 2. 修饰语义逐像素（shift_mod：B.not × i32/v2i16/i64 + 双修饰叠加）
+逐像素比对：256x256，三角形内 7812 px、外 0 px（边界带跳过），失败 0
+harness rc=0
+  spirv-dis 见 OpNot ×8（OpNot=200 实证）
+
+## 3. not_result 反转正例逐像素
+  [shift_notres] harness rc=0
+  [bytevec_notres] harness rc=0
+  [rot_notres] harness rc=0
+
+## 4. 全量回归矩阵
+
+合计：91 PASS / 0 FAIL
+
+## 5. E2E 端到端
+
+E2E 总分：10/10 可译 + val PASS（另 0 个=记账：可译性未达标但原因已列明，不掩盖）

@@ -1,0 +1,24 @@
+# log-fail.txt —— 失败面/拦截面留档（2026-10-13，issue-gold15-bprime-p3-preload-abi）
+
+## 1. Builtin 枚举踩坑（spirv-dis 逐值实证修正）
+初版按 Khronos 常见表写 FRAGCOORD=14/SAMPLEID=17/SAMPLEMASK=19 → spirv-val 报
+'PatchVertices requires Tessellation'——spirv-dis 实证本机枚举低位区偏移 +1
+（14=PatchVertices/17=FrontFacing/19=SamplePosition → 正确 15/18/20）；
+compute/vertex 区（26/27/28/42/43）无偏移一次命中。教训：Builtin 编号一律 spirv-dis 实证。
+
+## 2. OpVariable 指针类型坑
+mk() 初版把值类型当 Result Type 传 OpVariable → val 'is not a pointer type'；
+须先 OpTypePointer(Input, 值类型) 再 OpVariable(指针类型)（var_out 的 t_out 同构先例）。
+
+## 3. Flat 装饰要求
+SampleId/SampleMask（整数 Input）须 Flat 装饰（VUID-StandaloneSpirv-Flat-04744）+
+SampleRateShading 能力，已补（need_sample_rate 既有基建）。
+
+## 4. 并行执行竞态复发（教训强化）
+一次编辑与验证同批并行又出 AttributeError 假错（上批已记教训，本批再犯）——
+固定流程：编辑批与验证批严格串行。
+
+## 5. 占位项存留（非拦截，列明待 B2）
+fragment r57=PrimitiveId（Vulkan 需 GS）、r58=PrimitiveFlags、r62:63=FrameArg；
+vertex r59=InternalId（IDVS buf idx，无 Vulkan BuiltIn）、r62=DrawId（DrawParameters 扩展）、
+r63=ViewId（ViewIndex 扩展）——占位 0；PositionXY u16 坐标编码（floor 截断）待 B2 真机数据面复核。

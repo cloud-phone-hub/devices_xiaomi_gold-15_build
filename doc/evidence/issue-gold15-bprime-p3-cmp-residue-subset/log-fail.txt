@@ -1,0 +1,19 @@
+# log-fail.txt —— 失败面/拦截面留档（2026-10-13，issue-gold15-bprime-p3-cmp-residue-subset）
+
+## 1. NaN 探针（平台语义取证，决定测试避开 NaN 输入）
+探针：FCMP gtlt(NaN, 1.0) 按 kraid/SPIR-V 规范应为 false（无序→false）；
+MoltenVK/Metal 实渲 r7=0xFFFFFFFF（像素 0,255,255,255）= OpFOrdNotEqual(NaN,1) 判真——
+Metal '!=' 运算符对 NaN 为无序语义，平台层与 SPIR-V OpFOrdNotEqual（有序不等）不符。
+翻译器保持规范 OpFOrdNotEqual；gtlt 测试改用有序输入锁定映射；NaN 行为待 B2/真机复核。
+
+## 2. 错误实现对照（以正例期望 255,255,255,255 跑 harness 必须失败）
+[cmp_and_neg] harness rc=1（预期 1）  像素(66,65) 在三角形内但为 0,255,255,255
+
+## 3. 正例错期望负向对照（逐像素报真值）
+像素(66,65) 在三角形内但为 255,255,255,255
+
+## 4. 仍拦的比较族边界（fail-loud 保留 + 归档依据）
+condition=total：kraid total_cmp_data 仅浮点（IEEE totalOrder），SPIR-V 无原语 → 不猜合成；
+result_type=u1：仅 ICMP_MULTI（64 位比较构造，opcode2=0x2，未建模）使用，普通 ICMP fold panic；
+result_type=f1（8 位 lane）：kraid CmpResultType::fold 对 8 位 panic（仅 32/16 有效）= 编码层非法；
+以上三者由 fl_cmp_rtype/fl_v4u8_rtype 守住（fl_cmp_cond/fl_br_combine 已随本批放口语义反转）。

@@ -1,0 +1,16 @@
+# log-fail.txt —— 失败面/拦截面留档（2026-10-13，issue-gold15-bprime-p3-widen-src-subset）
+
+## 1. 错误实现对照（以正例期望 255,255,255,255 跑 harness 必须失败）
+[widen_src_neg] harness rc=1（预期 1）  像素(66,65) 在三角形内但为 0,255,255,255
+
+## 2. 正例错期望负向对照（逐像素报真值）
+像素(66,65) 在三角形内但为 255,255,255,255
+像素(67,65) 在三角形内但为 255,255,255,255
+
+## 3. 语义反转说明（非拦截项）
+fl_shift16_swz / fl_shift64_widen / fl_shift64_lut 三例随源形态放开语义反转为正例
+shift16_swz/shift64_widen/shift64_lut（既有基线中它们为 fail-loud 项，本批移出 FAIL_LOUD）
+
+## 4. 仍拦的源形态边界（fail-loud 保留）
+v2i16 源 swizzle reserved 码（swiz_int_m 14/15）；widen 码越界（如 32/64 位源码 8 之外）；
+移位量 lane 码越界（i32/i64 仅 b0..b3=4..7，fl_rot_shiftsel 守）；B 源无 widen 字段（ISA 层面即无此形态）。

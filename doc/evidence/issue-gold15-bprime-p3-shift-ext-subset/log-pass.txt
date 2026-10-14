@@ -1,0 +1,29 @@
+# log-pass.txt —— 通过面留档（2026-10-13，issue-gold15-bprime-p3-shift-ext-subset）
+
+## 1. rotate 解码回环（kraid 字段表补丁字 → va2spirv 解码，4 条）
+rot: 25 字，打补丁 4 处 → /tmp/rt.bin
+[15] 0x00b4c40311c00b0a  LROT_OR.i32        dest=reg:4 srcs=[reg:10, reg:11, lut:0] flow=none
+[16] 0x00b4c50210c10e0d  RROT_AND.i32       dest=reg:5 srcs=[reg:13, reg:14, lut:4294967295] flow=none
+[17] 0x00b5c62302c01110  LROT_XOR.v2i16     dest=reg:6 srcs=[reg:16, reg:17, lut:0] flow=none
+[18] 0x01b7c80211571654  RROT_OR.i64        dest=reg:8 srcs=[reg_ptr:20, reg:22, reg_ptr:23] flow=none
+  字段核对：[15] bits24-25=or(1)/bits32-34=lrot(3)；[16] and(0)/rrot(2)；[17] xor(2)/lrot(3)；[18] or(1)/rrot(2)
+
+## 2. frag_shift_ext（v2i16/i64 移位）MoltenVK 逐像素（期望 255,255,255,255）
+逐像素比对：256x256，三角形内 7812 px、外 0 px（边界带跳过），失败 0
+harness rc=0
+
+## 3. frag_rot（rotate 全宽）MoltenVK 逐像素（期望 255,255,255,255）
+逐像素比对：256x256，三角形内 7812 px、外 0 px（边界带跳过），失败 0
+harness rc=0
+
+## 4. 正例错期望负向对照（0,0,0,0 → 逐像素报真值，前 2 行）
+像素(66,65) 在三角形内但为 255,255,255,255
+像素(67,65) 在三角形内但为 255,255,255,255
+
+## 5. 全量回归矩阵
+
+合计：89 PASS / 0 FAIL
+
+## 6. E2E 端到端
+
+E2E 总分：10/10 可译 + val PASS（另 0 个=记账：可译性未达标但原因已列明，不掩盖）

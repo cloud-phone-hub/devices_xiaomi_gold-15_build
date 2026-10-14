@@ -1783,12 +1783,24 @@ vulkan1.1` frag/vert 双 PASS。**翻译语义正确性由像素比对证明**�
 | `IADD_IMM.i32` | 1 dest + 1 src(A) + **32 位立即数**（`val<<8` 直嵌 bits8-39；src 绑零=LUT0 即规范的立即数 move） | `OpIAdd`（128）；**任意 32 位常量只能靠它自造**（`MOV.i32` 源为单 src 无 imm，小常量 LUT 仅 32 项） |
 | `U16_TO_F32` / `S16_TO_F32` | 16 位 lane `h0`(低半)/`h1`(高半)@bit28；src `rN^`(mode1) 取等值 | `U16`：逻辑移位+`&0xFFFF`→`OpConvertUToF`（**112**）；`S16`：算术移位→`OpConvertSToF`（**111**）；`OpShiftRightLogical=194/Arithmetic=195/LeftLogical=196`、`OpBitwiseAnd=199`（编号一律 `spirv-as`/`spirv-dis` 实证） |
 | `IADD.u32` / `ISUB.u32` / `IMUL.i32` | 2 src（A/B）+ 1 dest，源 `reg`/`reg_ptr`(rN^)/`lut`/`fau`；**同 opcode `0xA0@48`，以 opcode2@16 区分（`0x0`/`0x1`/`0xA`，mask `0xF`）** | `OpIAdd`（128）/`OpISub`（130）/`OpIMul`（132）；**加/减/乘 32 位结果位型与有/无符号无关 → 统一用 `t_i32`，无需新增 unsigned 类型**；saturate（bit30，IADD 组）未建模 → 显式 fail-loud，widen（`0xF@36\|0xF@26`）由 `src_mod_mask()` 拦 |
-| `LSHIFT_OR.i32` / `RSHIFT_AND.i32` | 3 src：A（`widen`）+ shift + B（`not`）；**同 opcode `0xB4@48`，以 opcode2@24 区分（`0x101`=LSHIFT_OR、`0x000`=RSHIFT_AND，mask `0x703`；`ARSHIFT_AND`=`0x400`）**。**`shift` 源的 `widen` 字段落 `offset 26/mask 0xF`**（非 0/2 源的 36）= 字节选择 swizzle，`.b00`（低字节）= `swizzles_8_bit` 的 `B0000`（值 **4**） | `LSHIFT_OR`→`OpShiftLeftLogical`（196）+`OpBitwiseOr`（197）；`RSHIFT_AND`→`OpShiftRightLogical`（194）+`OpBitwiseAnd`（199）；**移位/按位 32 位结果位型与符号无关 → 统一 `t_i32`**；`not_result`（bit30）显式 fail-loud，shift 源非 `.b00`（widen≠4）显式 fail-loud，B `not`（bit35）/A `widen`（bit36-39）由 `src_mod_mask()` 拦 |
-| `ICMP_OR.u32` / `FCMP_OR.f32` | 3 src：A、B、C（OR 项）；**`ICMP_OR.u32`=`opcode 0xF0@48`+`opcode2 0x0@24`、`FCMP_OR.f32`=`0xF4@48`+`0x0@24`**（同族 AND 变体 `opcode2 0x1`；`v2u16/v4u8/v2f16`=`0xF1/0xF2/0xF5`；有符号 `ICMP_OR.s32`=`0xF8`）。两个修饰位域：**`condition`@32/3**（`0=eq 1=gt 2=ge 3=ne 4=lt 5=le 6=gtlt 7=total`）、**`result_type`@30/2**（`0=i1` int 0/1、`1=f1` float 0.0/1.0、`2=m1` int 0/~0、`3=u1` 64 位比较低半） | `dest=(A cond B) OR C`：先产 **`%bool` 谓词**（整数无符号→`OpIEqual/OpINotEqual`/`OpUGreaterThan` 系列；浮点→`OpFOrdEqual`/`OpFOrdGreaterThan`…有序系列，`ne`→`OpFUnordNotEqual`），再按 `result_type` 用 **`OpSelect`** 编码（i1→`%int 1/0`、m1→`%int 0xFFFFFFFF/0`、f1→`%float 1.0/0.0`）；**C 源仅建模常量**（0 短路；整数域非零→`OpBitwiseOr`；浮点域非零/非常量→fail-loud）；`condition` 的 `gtlt/total`、`result_type` 的 `u1` 显式 fail-loud。编号一律查 `spirv/1.0/spirv.hpp`（`OpTypeBool=20`、`OpSelect=169`、`OpIEqual..OpFUnordGreaterThanEqual=170..191`） |
-| `BRANCHZ` | 1 src（`combine`："compare to zero"）+ 1 立即数 `offset`（`@8/27 有符号`）+ `va_mod eq`@36；**`opcode 0x1F@48`**；语义 `if(src?=0) PC+=8*(offset+1)` 否则 `PC+8`，offset 以指令字（8B）为单位、相对下一指令（正偏移=跳过数）。**默认分支当「非零」、`.eq` 分支当「为零」**；真机 flow=10=`reconverge`（divergent 前置）。`BRANCHZI`=`opcode 0x2F@48`（2 源+`absolute`@40，跳 blend shader）不在范围 | → **SPIR-V CFG**：寄存器由 **Function i32 变量 + `OpBitcast`** 承载（合流/回边免 phi）；前向=if-then（`OpSelectionMerge`+`OpBranchConditional`）；**后向=do-while 循环**（`OpLoopMerge`+回边 `OpBranch`，`offset` 符号扩展，fall-through 进 header 须 `OpBranch`）。条件：源与整数零比→`OpINotEqual`/`OpIEqual`（源须整数比较结果 m1/i1 或常量）。fail-loud：嵌套/源 `combine` 非 none/浮点源/`BRANCHZI` |
+| `LSHIFT_OR.i32` / `RSHIFT_AND.i32` | 3 src：A（`widen`）+ shift + B（`not`）；**同 opcode `0xB4@48`，以 opcode2@24 区分（`0x101`=LSHIFT_OR、`0x000`=RSHIFT_AND，mask `0x703`；`ARSHIFT_AND`=`0x400`）**。**`shift` 源的 `widen` 字段落 `offset 26/mask 0xF`**（非 0/2 源的 36）= 字节选择 swizzle，`.b00`（低字节）= `swizzles_8_bit` 的 `B0000`（值 **4**） | `LSHIFT_OR`→`OpShiftLeftLogical`（196）+`OpBitwiseOr`（197）；`RSHIFT_AND`→`OpShiftRightLogical`（194）+`OpBitwiseAnd`（199）；**移位/按位 32 位结果位型与符号无关 → 统一 `t_i32`**；修饰已建模：B 源 `not`（bit35，组合前 `OpNot`）与 `not_result`（bit30，组合后 `OpNot`，见移位/旋转族修饰行）；shift 源非 `.b00`（widen≠4）显式 fail-loud，B `not`（bit35）/A `widen`（bit36-39）由 `src_mod_mask()` 拦 |
+| `ICMP_OR.u32` / `FCMP_OR.f32` / **`ICMP_AND.u32` / `ICMP_AND.v4u8`** | 3 src：A、B、C（accum 项）；**`ICMP_OR.u32`=`opcode 0xF0@48`+`opcode2 0x0@24`、`ICMP_AND.u32`=`0xF0/0x1`、`ICMP_OR.v4u8`=`0xF2/0x0`、`ICMP_AND.v4u8`=`0xF2/0x1`、`FCMP_OR.f32`=`0xF4/0x0`**（mask `0x3`；`ICMP_MULTI`=`0xF2/0x2` 等未建模）。两个修饰位域：**`condition`@32/3**（`0=eq 1=gt 2=ge 3=ne 4=lt 5=le 6=gtlt 7=total`）、**`result_type`@30/2**（`0=i1` int 0/1、`1=f1` float 0.0/1.0、`2=m1` int 0/~0、`3=u1` 64 位比较低半） | `dest=(A cond B) <accum> C`：先产 **`%bool` 谓词**（整数无符号→`OpIEqual/OpINotEqual`/`OpUGreaterThan` 系列，`gtlt`=ne；浮点→`OpFOrdEqual`/`OpFOrdGreaterThan`…有序系列，`ne`→`OpFUnordNotEqual`、**`gtlt`→`OpFOrdNotEqual`（182，有序不等）**），再按 `result_type` 用 **`OpSelect`** 编码（i1→`%int 1/0`、m1→`%int 0xFFFFFFFF/0`、f1→`%float 1.0/0.0`）；accum：OR→位或/`OpLogicalOr`、AND→位与/`OpLogicalAnd`（kraid 布尔与先于编码，v4u8 逐 lane `OpLogicalAnd`）；**C 源仅建模常量**（0 短路；整数域非零→位组合；浮点域非零/非常量→fail-loud）；`total`（SPIR-V 无 totalOrder 原语）/`u1`（仅 ICMP_MULTI）/`f1`（8 位 lane 编码非法）显式 fail-loud。编号一律查 `spirv/1.0/spirv.hpp`（`OpTypeBool=20`、`OpSelect=169`、`OpIEqual..OpFUnordGreaterThanEqual=170..191`） |
+| `BRANCHZ` | 1 src（`combine`："compare to zero"）+ 1 立即数 `offset`（`@8/27 有符号`）+ `va_mod eq`@36；**`opcode 0x1F@48`**；语义 `if(src?=0) PC+=8*(offset+1)` 否则 `PC+8`，offset 以指令字（8B）为单位、相对下一指令（正偏移=跳过数）。**默认分支当「非零」、`.eq` 分支当「为零」**；真机 flow=10=`reconverge`（divergent 前置）。`BRANCHZI`=`opcode 0x2F@48`（2 源+`absolute`@40，跳 blend shader）不在范围 | → **SPIR-V CFG**：寄存器由 **Function i32 变量 + `OpBitcast`** 承载（合流/回边免 phi）；前向=if-then（`OpSelectionMerge`+`OpBranchConditional`）；**后向=do-while 循环**（`OpLoopMerge`+回边 `OpBranch`，`offset` 符号扩展，fall-through 进 header 须 `OpBranch`）。条件：源按 **`combine`@37/3 归约**（`branch_combine_m`/kraid `BranchCombineOp`：none=整字、h0/h1=对应半字非零、and=整字==0xFFFFFFFF、lowbits=bits3..20 非全 0/全 1，**五形态全建模**；`.eq` 整体取反）后判定→`OpINotEqual`/`OpIEqual`/`OpLogicalNot` 系（源须整数比较结果 m1/i1 或常量）。fail-loud：嵌套/浮点源/`BRANCHZI` |
+| 字节向量子族：`LSHIFT_*/RSHIFT_*/ARSHIFT_*.v4i8`（9 变体）/ `ICMP_OR.v4u8` / `U8_TO_U32` | 4×i8 打包算术，语义=kraid `PerCompFoldable` 逐分量 fold（lane 宽截断移位=模 8、ARSHIFT 按 i8 保号、逐 lane 逻辑组合；比较族 accum **布尔** OR 先于编码、`i1`=0/1、`m1`=0/0xFF 逐 lane）。编码：v4i8 移位族 opcode **`0xB6@48`**（同 i32 opcode2 表）；A 源 `widen@36`、shift/B 源 `widen@26` = **`swizzles_8_bit` 字节 lane 置换**（`b<abcd>`=输出 lane i 取源字节 abcd[i]，`b0000` 广播码与 `lanes_8_bit b00` 同值同义，12-15 reserved）；`ICMP_OR.v4u8`=`0xF2@48`+opcode2 `0x0@24`；`U8_TO_U32`=`0x90@48`+opcode2 `0x10@16`、源 lane@28/2（b0..b3） | 逐 lane 拆解为 i32 标量流：`OpShiftRightLogical`+`OpBitwiseAnd(0xFF)` 提字节（`swizzle8_lanes` 置换）→ `OpShift*`（移位量 `&7` 截断）+ `OpBitwise*` 组合 → `OpShiftLeftLogical`+`OpBitwiseOr` 打包；比较族 `OpUGreaterThan` 系→`OpLogicalOr`→`OpSelect` 逐 lane 编码；`U8_TO_U32` 提字节零扩展。**dest 宽度字段**（bits46-47，`dest_width_m`）：h0/h1=窄写掩码合并保留旧半字（`test_lower_copy` 硬件实测），width=0 实证=真写全字。fail-loud：swizzle reserved 码 / `result_type` f1（8 位）/u1 / `.h0` 窄写未定义寄存器（not_result 已随移位/旋转族修饰批放行） |
+| 移位/旋转族宽度变体：`LSHIFT_*/RSHIFT_*/ARSHIFT_*.{v2i16,i64}` + **`LROT_*/RROT_*` 全宽**（i32/v2i16/v4i8/i64 × AND/OR/XOR） | 与 i32/v4i8 移位同 R3 布局（kraid `isa-v9-v14.xml`），仅 **`shift_operation@32/3`**（rshift=0/lshift=1/**rrot=2/lrot=3**/arshift=4）不同 → valhall opcode2：RROT=0x200 系 / LROT=0x300 系（与 RSHIFT=0x000/LSHIFT=0x100/ARSHIFT=0x400 双源自洽）；`LROT` 纯形=`LROT_OR`+src2=LUT0。宽度变体 opcode：v2i16=**`0xB5@48`**、i64=**`0x1B7@48`**（`SourceEncoding64` 寄存器对 + dest align(2) + `double_width` exact=3）。**rotate 不在 valhall ISA.xml** → 解码表 `_synth_rotate_instrs` 合成、测试字 `gen_rot_words.py` 生成（asm.py 占位 + 3 位补丁）。移位量 lane 码宽度相关：v2i16=`shift_bitwise_i16_lanes_m`（b02=0 默认→字节 [0,2]，b00/b11/b22/b33/b01/b23）、i32/i64=`shift_bitwise_i32_lanes_m`（b0..b3=码 4..7）；**A 源 swizzle/widen 已全放**（v2i16=`swiz_int_m` 半字置换 + b\*\* 字节构造零扩展、i32/i64=`widen_int_m` h0/h1/b0..b3/w0 子元素加宽零扩展；B 源 ISA 无 widen 字段）；LUT 零扩展（`Imm32→u64`） | `emit_shift_packed` 泛化逐 lane（8/16/32/64 × 5 方向 × 3 组合）：lane 宽截断移位/旋转（`rot=(x<<s)|(x>>((w-s)&(w-1)))`，s 掩 w-1 自洽）+ ARSHIFT `_sext_w` 保号；64 位走 u64（`read_64`/`write_64` 对读）；`_widen32`/`_wide_src` 子元素加宽（**U 类型零扩展**，kraid `fold_u32` + `hw_tests::test_op_shift_lop` U32/U64 硬件 Exact 实证）。fail-loud 仅余非法编码防御（swizzle reserved 码 / 移位量 lane 码越界 / widen 码越界）——**族内全清** |
+| 移位/旋转族修饰：`not_result`（bit30）/ B 源 `not`（bit35） | 移位族 group 级修饰（valhall ISA.xml `not="true"` 6 处全在移位组 B 源，全 ISA 仅此族有）。语义=kraid `OpShiftLop` fold 同序两步：`SrcMod::BNot`（`fold_u32/u64 → !u`）**组合前**全宽按位取反源（与逐 lane 提取可交换）；`not_result` **组合后** `!data` 截 lane 宽 | `OpNot`（**200**，spirv-dis 实证）；8/16 位 lane 取反后 `&0xFF/0xFFFF` 截断，32/64 位域天然全宽；`emit_shift`（i32）与 `emit_shift_packed`（全宽）同序实现。`src_mod_mask` 仅对 `SHIFT_I32|SHIFT_EXT` 豁免 `not` 键，其余指令继续拦 |
 | `NOP.end` | flow 控制（`end`=15） | shader 终止 |
-P2 约定 ABI：r0..r3 = 片元 RGBA 输出 → `OpCompositeConstruct vec4 → OpStore`。
-顶点侧为宿主模板 shader（location0 vec2 → gl_Position，并**镜像片元 varying 接口**按 (loc,comps) 输出同型常量 varying），非翻译产物。
+**阶段输出 ABI**（`build(stage)`，非 fragment 输出组装批）：`fragment` = P2 约定 r0..r3 = 片元 RGBA → `OpCompositeConstruct vec4 → OpStore`；`compute` = `GLCompute` + `LocalSize 1 1 1`，**无输出接口**（输出=STORE→SSBO，指令流内已建模），不要求 r0..r3；`vertex` = `Vertex` + **占位 Position**（`vec4(0,0,0,1)`，SPIR-V 模块契约；真机位置/varying 经 STORE 写输出缓冲，接口映射待 B2）。E2E 按阶段（3C/4V/3F）驱动。
+**预置寄存器指针 ABI**（`_emit_preloads(stage)`，preload-abi 批）：r55–r63 入口预置（读=环境值、可覆盖写）按阶段 **BuiltIn 输入组装**（kraid `preload_reg()` 权威映射 + 真机语境实证）：
+`compute` = r55=LocalId01 双半字（local_id_0 | local_id_1<<16）/r56=LocalId2/r57..r59=WorkgroupId0..2/r60..r62=GlobalId0..2（`LocalInvocationId`/`WorkgroupId`/`GlobalInvocationId` 提分量）；
+`vertex` = r60=VertexIndex、r61=InstanceIndex（r59/r62/r63 无 Vulkan BuiltIn → 占位 0）；
+`fragment` = r59=PositionXY（`FragCoord.xy` floor 转 u16 双半字打包）/r60=SampleMaskIn[0]/r61=SampleId<<16|coverage。
+Builtin 枚举（spirv-dis 逐值实证，低位区偏移 +1）：FragCoord=**15**/SampleId=**18**/SampleMask=**20**/WorkgroupId=26/LocalInvocationId=27/GlobalInvocationId=28/VertexIndex=42/InstanceIndex=43；SampleId/SampleMask 整数 Input 须 Flat + `SampleRateShading` 能力。占位 0 待 B2：fragment r57/r58/r62:63（PrimitiveId/PrimitiveFlags/FrameArg）、vertex r59/r62/r63（InternalId/DrawId/ViewId）；PositionXY u16 坐标编码待 B2 复核。
+顶点侧另有宿主原生模板 shader（location0 vec2 → gl_Position，并**镜像片元 varying 接口**按 (loc,comps) 输出同型常量 varying），非翻译产物。
+
+**B2 渲染桥最小闭环（开工 2026-10-14，[issue-gold15-bprime-b2-bridge-min](evidence/issue-gold15-bprime-b2-bridge-min/solution.md)）**：FS atom → 内核抽 shader+RT 元数据 → `/proc/cdh_gpumbox`（0666，procfs）→ `gpumbox_bridge`（NDK 静态）→ hvc11 GR01 帧 → `gpurender_host.py`（va2spirv+harness `--dump`）→ RP01 → 内核写回 RT（线性/AFBC solid 头）→ 放行 job。shader 捕获双路：Tiler atom DCD 捕获缓存 + payload/FBD BFS（+0xe8 直指，(19) chase 实证）。卡点：helper 保活（guest 重启循环杀进程）。
+
+**纹理族建模（2026-10-14，[issue-gold15-bprime-p3-tex-subset](evidence/issue-gold15-bprime-p3-tex-subset/solution.md)）**：`TEX_SINGLE`（0x128@48，真采样 `OpImageSampleImplicitLod`，2x2 测试纹理 DescriptorSet 0 Binding 3）+ `VAR_TEX_BUF_SINGLE`（0x130@48，LD_VAR v2f32 融合采样）；真机字（run106 gpu.sock.log GR01 帧取证，seq=10 TEX/seq=11 VAR_TEX）翻译通过，GR01 oneshot **status=0 带像素**（四象限四色验证真采样）；fail-loud 面（dimension/shadow/lod/array 等）拦截。真纹理数据面归 B2。遗留：`MKVEC.v2i16` 向量构造族（vartex_real.bin 全链下一缺口）。
 
 **实现三件套**（`devices/xiaomi/gold-15/out/tmp/p2/`）：
 - `va2spirv.py`：解码器（复用 Mesa `valhall.py` 解析 ISA.xml 的位域元数据）+
@@ -1814,16 +1826,55 @@ P2 约定 ABI：r0..r3 = 片元 RGBA 输出 → `OpCompositeConstruct vec4 → O
   `frag_cmp_real.asm` / `frag_cmp_real.bin`：**3 条真机字直接取材**（2 ICMP + 1 FCMP）+ 前置造常量（17 指令/136B）；
   `frag_cmp_or.asm` / `frag_cmp_or.bin`：**C 源非零**（`0xFFFFFFFF`，整数域位或，13 指令/104B）；
   `frag_cmp_neg.asm` / `frag_cmp_neg.bin`：负向对照（比较条件互补，17 指令/136B）；
-  `fl_cmp_cond.asm` / `fl_cmp_rtype.asm` / `fl_cmp_fau.asm` / `fl_cmp_csrc.asm`（+ `.bin`）：四条 fail-loud
-  （`condition=gtlt` / `result_type=u1` / 源为 FAU `u2.w1` / C 源非常量）；
+  `fl_cmp_rtype.asm` / `fl_cmp_fau.asm` / `fl_cmp_csrc.asm`（+ `.bin`）：三条 fail-loud
+  （`result_type=u1` / 源为 FAU `u2.w1` / C 源非常量；fl_cmp_cond 已随 gtlt 放开语义并入 cmp_and）；
   `frag_branch.asm` / `frag_branch.bin`：BRANCHZ 前向 if-then（base r0=0.2→条件 5>3 真→跳过 then→保持 0.2，10 指令/80B）→ 期望 (51,0,0,255)；
   `frag_branch_neg.asm` / `frag_branch_neg.bin`：负向对照（ICMP 操作数互换 3>5 假→then 执行→r0 翻倍 0.4）→ 期望 (102,0,0,255)；
   `frag_branch_eq.asm` / `frag_branch_eq.bin`：`.eq` 修饰（5>3 真、分支判「为零」→不跳→then）→ 期望 (102,0,0,255)；
-  `fl_br_nest.asm` / `fl_br_combine.asm` / `fl_br_fsrc.asm` / `fl_br_i.asm`（+ `.bin`）：四条 fail-loud
-  （区内嵌套/源 combine 非 none/浮点源/BRANCHZI）；
+  `fl_br_fsrc.asm` / `fl_br_i.asm`（+ `.bin`）：两条 fail-loud
+  （浮点源/BRANCHZI；fl_br_combine 已随 combine and/lowbits 放开语义并入 br_combine）；
   `frag_loop.asm` / `frag_loop.bin`：BRANCHZ 后向 do-while 循环（cnt=4→body acc+=1/cnt-=1→BRANCHZ 回跳→acc=4，12 指令/96B）→ 期望 (102,0,0,255)；
   `frag_loop_neg.asm` / `frag_loop_neg.bin`：负向对照（cnt=2→acc=2）→ 期望 (51,0,0,255)；
   `fl_loop_nest.asm`（+ `.bin`）：fail-loud（循环体内嵌套分支）；
+  `frag_bytevec.asm` / `frag_bytevec.bin`：字节向量子族用例（`LSHIFT_AND.v4i8` b0101 置换+逐 lane
+  移位量 / `LSHIFT_XOR.v4i8` + dest `.h0` 窄写保留高半字 / `ARSHIFT_AND.v4i8` 保号 /
+  `ICMP_OR.v4u8.ne.i1` + `U8_TO_U32` 四 lane 加权链，四通道 eq.f1 检查）→ 期望 (255,255,255,255)；
+  `frag_bytevec_neg.asm`（+ `.bin`）：负向对照（ARSHIFT 误作 RSHIFT，真实像素 255,255,0,0）；
+  `fl_bytevec_swz.asm` / `fl_v4u8_rtype.asm` / `fl_bytevec_wrmask.asm`
+  （+ `.bin`）：三条 fail-loud（swizzle reserved 码 / v4u8 `result_type=f1` /
+  `.h0` 窄写未定义寄存器；not_result 已随移位/旋转族修饰批放行）；
+  `frag_shift_ext.asm` / `frag_shift_ext.bin`：移位族宽度变体用例（`LSHIFT_AND.v2i16` b02 默认
+  移位量 / `ARSHIFT_OR.v2i16` 保号 + `.b11` 位移字节选择 / `LSHIFT_XOR.i64` 寄存器对 /
+  `ARSHIFT_AND.i64` 保号）→ 期望 (255,255,255,255)；
+  `frag_shift_ext_neg.asm`（+ `.bin`）：负向对照（ARSHIFT 误作 RSHIFT，真实像素 255,0,255,255）；
+  `frag_rot.asm` + `rot.bin`（`gen_rot_words.py` 生成，asm.py 汇编移位占位字 + kraid 字段表
+  `shift_operation@32/3` 3 位补丁）：rotate 全宽用例（`LROT_OR.i32` 纯形 / `RROT_AND.i32` /
+  `LROT_XOR.v2i16` 逐半字 / `RROT_OR.i64`）→ 期望 (255,255,255,255)；`rot_neg.bin` 同 asm
+  少打一处补丁 = 错误实现对照（真实像素 255,0,255,255）；
+  `fl_rot_shiftsel.asm`（+ `.bin`）：一条 fail-loud（i32 rotate 移位量 lane 码越界；
+  v2i16/i64 源形态已随 widen-src 批放行）；
+  `shift_notres.asm` / `bytevec_notres.asm` / `rot_notres.asm`（rot 由 `gen_rot_words.py` 生成）：
+  `not_result` 修饰正例（原 fl_shift_and_notres/fl_bytevec_notres/fl_rot_notres 语义反转，
+  i32/v4i8/rotate 三形态）→ 期望 (255,255,255,255)；
+  `frag_shift_mod.asm` / `frag_shift_mod.bin`：B 源 `not` 综合正例（i32/v2i16/i64 +
+  `not_result` 叠加 ×2）→ 期望 (255,255,255,255)；
+  `frag_shift_mod_neg.asm`（+ `.bin`）：负向对照（`.not` 误漏，真实像素 255,0,255,255）；
+  `frag_cmp_and.asm` / `frag_cmp_and.bin`：比较族残余正例（`ICMP_AND.v4u8` 逐 lane 布尔 AND +
+  `ICMP_AND.u32` + `gtlt` 有序不等双向锁定）→ 期望 (255,255,255,255)；
+  `frag_cmp_and_neg.asm`（+ `.bin`）：负向对照（accum AND 误作 OR，真实像素 0,255,255,255）；
+  `frag_br_combine.asm` / `frag_br_combine.bin`：BRANCHZ combine `.and`/`.lowbits` 双分支正例
+  → 期望 (102,102,255,255)；
+  `compute_store.asm` / `compute_store.bin`：非 fragment 输出组装正例（compute 阶段：
+  **无 r0..r3**，LD_PKA+STORE 写 SSBO，GLCompute+LocalSize 模块）——VAL_ONLY（val 即绿）；
+  `vtx_store.asm` / `vtx_store.bin`：非 fragment 输出组装正例（vertex 阶段：LD_ATTR_IMM+
+  LEA_BUF_IMM+STORE 贴真机 vertex 尾形态，Vertex 模块+占位 Position）——VAL_ONLY；
+  `frag_preload.asm` / `frag_preload.bin`：预置寄存器真实 ABI 正例（r0/r2=预置非零探测、
+  r1=r57 占位 0 路径、r3=可覆盖验证，双向锁定）→ 期望 **(255,128,255,255)**；
+  `frag_widen_src.asm` / `frag_widen_src.bin`：源形态综合正例（i32 A.h0 加宽 / i32 A.b2 /
+  v2i16 A.b20 字节构造 / i64 A.h1+LUT 零扩展）→ 期望 (255,255,255,255)；
+  `frag_widen_src_neg.asm`（+ `.bin`）：负向对照（A.h0 加宽误漏，真实像素 0,255,255,255）；
+  `shift16_swz.asm` / `shift64_widen.asm` / `shift64_lut.asm`（+ `.bin`）：源形态正例
+  （原 fl_shift16_swz/fl_shift64_widen/fl_shift64_lut 语义反转）→ 期望 (255,255,255,255)；
 - `harness.c`：MoltenVK 离屏渲染 + 边函数逐像素比对（跳过 1.5px 边界带），
   可选 4 参覆盖期望 RGBA（默认 `255,0,0,255`，`FMA` 用例传 `28 0 0 255`）。
 

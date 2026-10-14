@@ -1,0 +1,25 @@
+# log-pass.txt —— 通过面留档（2026-10-13，issue-gold15-bprime-p3-cmp-residue-subset）
+
+## 1. asm.py 编码回环（比较族残余形态）
+asm rc: 0 
+  0x00f2c443010c0b0a  opcode2@24=1  cond@32=3  rtype@30=0
+  0x00f0c50181c1100f  opcode2@24=1  cond@32=1  rtype@30=2
+  0x00f4c60680c01516  opcode2@24=0  cond@32=6  rtype@30=2
+  字段核对：v4u8 accum and(opcode2=1)/cond ne(3)/i1(0)；u32 and/gt(1)/m1(2)；f32 gtlt(6)/m1(2)
+
+## 2. frag_cmp_and 逐像素（accum AND + gtlt，期望 255,255,255,255）
+逐像素比对：256x256，三角形内 7812 px、外 0 px（边界带跳过），失败 0
+harness rc=0
+  spirv-dis 见 OpLogicalAnd/OpFOrdNotEqual ×6（OpLogicalAnd=167/OpFOrdNotEqual=182 实证）
+
+## 3. frag_br_combine 逐像素（combine .and/.lowbits，期望 102,102,255,255）
+逐像素比对：256x256，三角形内 7812 px、外 0 px（边界带跳过），失败 0
+harness rc=0
+
+## 4. 全量回归矩阵
+
+合计：93 PASS / 0 FAIL
+
+## 5. E2E 端到端
+
+E2E 总分：10/10 可译 + val PASS（另 0 个=记账：可译性未达标但原因已列明，不掩盖）

@@ -1,0 +1,107 @@
+# CDH gold-15 B′ P3 真机 shader E2E —— 通过现场（2026-10-13）
+# 改动：va2spirv.py 增入口预置寄存器 r56..r63（各置常量 0，占位 MVP）+ build() 纳入
+#       fail-loud 出口；新增 frag_preload.asm + run_matrix.py EXPECT["preload"]；
+#       新增 run_e2e.sh（E2E 复跑固化脚本）。
+# 复现：cd devices/xiaomi/gold-15/out/tmp/p2 && python3 run_matrix.py && ./run_e2e.sh
+
+$ python3 run_matrix.py（全量：37 渲染正例 + 10 对照 + 23 fail-loud = 70 项）
+
+[PASS] flat  render exit 0
+[PASS] fma  render exit 0
+[PASS] sfu  render exit 0
+[PASS] mod  render exit 0
+[PASS] vary  render exit 0
+[PASS] vary_v2  render exit 0
+[PASS] vary_v3  render exit 0
+[PASS] vary_real  render exit 0
+[PASS] ialu  render exit 0
+[PASS] ialu_real  render exit 0
+[PASS] shift  render exit 0
+[PASS] shift_neg  render exit 0
+[PASS] shift_real  render exit 0
+[PASS] cmp  render exit 0
+[PASS] cmp_neg  render exit 0
+[PASS] cmp_or  render exit 0
+[PASS] cmp_real  render exit 0
+[PASS] cvt  render exit 0
+[PASS] cvt_real  render exit 0
+[PASS] branch  render exit 0
+[PASS] branch_eq  render exit 0
+[PASS] branch_neg  render exit 0
+[PASS] loop  render exit 0
+[PASS] loop_neg  render exit 0
+[PASS] widen  render exit 0
+[PASS] fau  render exit 0
+[PASS] mem  render exit 0
+[PASS] attr  render exit 0
+[PASS] attr_real  render exit 0
+[PASS] attr_f16  render exit 0
+[PASS] imul_b0  render exit 0
+[PASS] vary_f16  render exit 0
+[PASS] clper  render exit 0
+[PASS] lea_buf  render exit 0
+[PASS] int64  render exit 0
+[PASS] blend  render exit 0
+[PASS] preload  render exit 0
+[PASS] ialu_neg  对照 render exit 1（预期失败）
+[PASS] cvt_neg  对照 render exit 1（预期失败）
+[PASS] mem_neg  对照 render exit 1（预期失败）
+[PASS] attr_neg  对照 render exit 1（预期失败）
+[PASS] imul_b0_neg  对照 render exit 1（预期失败）
+[PASS] vary_f16_neg  对照 render exit 1（预期失败）
+[PASS] clper_neg  对照 render exit 1（预期失败）
+[PASS] lea_buf_neg  对照 render exit 1（预期失败）
+[PASS] int64_neg  对照 render exit 1（预期失败）
+[PASS] blend_neg  对照 render exit 1（预期失败）
+[PASS] fl_br_combine  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_br_fsrc  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_br_i  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_br_nest  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_cmp_cond  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_cmp_csrc  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_cmp_fau  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_cmp_rtype  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_loop_nest  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_widen_res  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_fau_ptr  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_mem_align  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_attr_table  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_ialu_widen  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_vary_srcfmt  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_clper_op  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_clper_widen  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_lea_table  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_lea_index  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_iadd64_widen  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_shaddx_widen  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_blend_format  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_tile_format  翻译 exit 2（预期 fail-loud=2）
+
+合计：70 PASS / 0 FAIL
+
+$ ./run_e2e.sh（真机 E2E 复跑：va2spirv → spirv-val --target-env vulkan1.2）
+[OK]   bin-007f00001000  translate OK + val PASS
+[FAIL] bin-007f00006c80  translate exit 2：错误：BRANCHZ 目标越界（index=25, end=15）
+[OK]   bin-007f0000c900  translate OK + val PASS
+[OK]   bin-007f00023e00  translate OK + val PASS
+[OK]   bin-007f00023e80  translate OK + val PASS
+[记账] bin-007f00026e00  指令流可译 + 输出组装跳过（错误：片元输出 r3 未写入）
+[OK]   bin-007f00032e80  translate OK + val PASS
+[OK]   bin-007f00034180  translate OK + val PASS
+[记账] bin-007f00037380  指令流可译 + 输出组装跳过（错误：片元输出 r2 未写入）
+[FAIL] bin-007f00037880  translate exit 2：错误：BRANCHZ 目标越界（index=19, end=15）
+
+E2E 总分：6/10（另 2 个指令流可译、输出组装跳过=记账）
+
+# preload 用例解码回显（asm.py 汇编 → va2spirv 解码，r57/r59/r61 为入口预置寄存器）
+[00] 0x00a4c0000000d03b  FADD.f32           dest=reg:0 srcs=[reg:59, lut:1065353216] flow=none
+[01] 0x0110c500000005c0  IADD_IMM.i32       dest=reg:5 srcs=[lut:0] flow=none
+      meta={'constant': 5}
+[02] 0x00a0c60000000539  IADD.u32           dest=reg:6 srcs=[reg:57, reg:5] flow=none
+[03] 0x0090c70000150006  U16_TO_F32         dest=reg:7 srcs=[reg:6] flow=none
+[04] 0x00b2c10000c0d107  FMA.f32            dest=reg:1 srcs=[reg:7, lut:1036831949, lut:0] flow=none
+[05] 0x00a4c2000000d13d  FADD.f32           dest=reg:2 srcs=[reg:61, lut:1036831949] flow=none
+[06] 0x0091fd00000000d0  MOV.i32            dest=reg:61 srcs=[lut:1065353216] flow=none
+[07] 0x00a4c3000000c03d  FADD.f32           dest=reg:3 srcs=[reg:61, lut:0] flow=none
+[08] 0x7800c00000000000  NOP                dest=None srcs=[] flow=end
+翻译完成：/tmp/pl.frag.spv / /tmp/pl.vert.spv（frag 1520B, vert 520B）
