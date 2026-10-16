@@ -63,7 +63,11 @@ PATCH_PROP = "build.prop"
 # （纯 64，官方 gold /system 内已有），不再定义 zygote_secondary。
 # 注：ramdisk `system/etc/ramdisk/build.prop` 的同名注入无效（该文件不被 init
 # 处理，实测无 ro.product.bootimage.* 日志），故改在此文件。
-VENDOR_SETS = {"ro.zygote": "zygote64"}
+VENDOR_SETS = {
+    "ro.zygote": "zygote64",
+    "ro.vendor.arm.gralloc.no_afbc_usage_flags": "0",
+    "ro.vendor.arm.gralloc.no_afbc_usage_mask": "0",
+}
 
 # —— ro.frp.pst 置空：禁掉 PersistentDataBlockService（L1 阻塞，run46 取证）——
 # 官方 gold /vendor/build.prop 声明 `ro.frp.pst=/dev/block/by-name/frp`。AOSP
@@ -163,6 +167,15 @@ if vmissing:
 # 规避 Mali DDK 在虚拟环境 primeShaderCache 打爆 171 (0xab) in-flight 任务门控导致 RenderEngine usleep 死循环
 blines.append("service.sf.prime_shader_cache=0")
 blines.append("ro.surface_flinger.prime_shader_cache.ultrahdr=0")
+blines.append("debug.fdsan=warn")
+blines.append("debug.fdsan.composer@3.3-se=warn")
+blines.append("vendor.debug.hwc.disp_support_decompress=0")
+blines.append("vendor.debug.hwc.mdp_support_decompress=0")
+blines.append("debug.mediatek.disp_decompress=0")
+blines.append("GLES_DISABLE_SURFACE_AFBC=1")
+blines.append("GLES_DISABLE_TEXTURE_AFBC=1")
+blines.append("debug.renderengine.backend=skiagl")
+blines.append("debug.hwui.initialize_gl_always=1")
 
 with open(bpath, "w", encoding="utf-8") as f:
     f.write("\n".join(blines) + "\n")

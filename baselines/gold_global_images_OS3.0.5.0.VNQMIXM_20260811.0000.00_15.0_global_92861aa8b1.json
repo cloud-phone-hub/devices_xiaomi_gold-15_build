@@ -67,7 +67,16 @@
     "note": "build-vendor / build-vendor_dlkm 的基座（virtio 内核匹配，debugfs 可解析）。images 待 unpack 后代入。"
   },
   "vendor": {
-    "build-prop-sets": [],
+    "build-prop-sets": [
+      [
+        "ro.hardware.egl",
+        "meow"
+      ],
+      [
+        "ro.hardware.vulkan",
+        "mali"
+      ]
+    ],
     "build-prop-unsets": [],
     "selinux-labels": {
       "bin/daemon": "u:object_r:pioneer_exec:s0",
@@ -88,7 +97,20 @@
       "etc/init/tee-supplicant.rc": "u:object_r:vendor_file:s0",
       "etc/vintf/manifest/android.hardware.security.keymint-service.mitee.xml": "u:object_r:vendor_configs_file:s0",
       "lib64/egl/libGLES_mali.so": "u:object_r:same_process_hal_file:s0",
-      "bin/hw/android.hardware.gatekeeper-service.mitee": "u:object_r:hal_gatekeeper_default_exec:s0"
+      "bin/hw/android.hardware.gatekeeper-service.mitee": "u:object_r:hal_gatekeeper_default_exec:s0",
+      "usr/idc/QEMU Virtio MultiTouch.idc": "u:object_r:vendor_file:s0",
+      "usr/idc/QEMU Virtio Tablet.idc": "u:object_r:vendor_file:s0",
+      "usr/idc/virt_tablet2multitouch.idc": "u:object_r:vendor_file:s0",
+      "lib64/egl/libEGL_meow.so": "u:object_r:same_process_hal_file:s0",
+      "lib64/egl/libGLESv1_CM_meow.so": "u:object_r:same_process_hal_file:s0",
+      "lib64/egl/libGLESv2_meow.so": "u:object_r:same_process_hal_file:s0",
+      "lib64/hw/vulkan.mali.so": "u:object_r:same_process_hal_file:s0",
+      "lib64/egl/libEGL_mesa.so": "u:object_r:same_process_hal_file:s0",
+      "lib64/egl/libGLESv1_CM_mesa.so": "u:object_r:same_process_hal_file:s0",
+      "lib64/egl/libGLESv2_mesa.so": "u:object_r:same_process_hal_file:s0",
+      "lib64/libgallium_dri.so": "u:object_r:same_process_hal_file:s0",
+      "lib64/libglapi.so": "u:object_r:same_process_hal_file:s0",
+      "lib64/hw/vulkan.virtio.so": "u:object_r:same_process_hal_file:s0"
     },
     "note": "build/vendor/patch 注入文件的 security.selinux 标签，键 = 注入树内相对路径；vendor 阶段按此回填，标签缺失即报错退出。除 bin/netmgr_setup 与 bin/daemon（CDH 可执行件，pioneer_exec）外均为 CDH 新增的配置/脚本件（CDH 自定义域，无官方对应件），沿用同项目同键的既定标签值。注：etc/fstab.mt6833 与 etc/init/hw/* 不注入——官方 vendor 内已有（见 vendor 基座=官方 vendor 的设计）。"
   },
