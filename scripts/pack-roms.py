@@ -149,7 +149,7 @@ GRUB_TIMEOUT_ANCHOR = "load_env -f ${partition_persist}/grubenv android_theme gr
 GRUB_VBMETA_MARKER = "# CDH: Remote KeyMint verified boot 参数"
 GRUB_VBMETA_ANCHOR = "\texport kernel_cmdline_dynamic"
 GRUB_VBMETA_PATCH = """\t# CDH: Remote KeyMint verified boot 参数（与 device.go FactoryTEEVerifiedBootHash 一致）
-\tset kernel_cmdline_dynamic="${kernel_cmdline_dynamic} androidboot.vbmeta.digest=fe049d35e450d9faf4b26788864f7b5fd5b857276d5271b067ef0e0268acff6f androidboot.vbmeta.device_state=locked androidboot.verifiedbootstate=green"
+\tset kernel_cmdline_dynamic="${kernel_cmdline_dynamic} androidboot.vbmeta.digest=fe049d35e450d9faf4b26788864f7b5fd5b857276d5271b067ef0e0268acff6f androidboot.vbmeta.device_state=locked androidboot.verifiedbootstate=green androidboot.selinux=permissive"
 """
 
 

@@ -292,12 +292,17 @@ _ZYGOTE64_LINE = b"ro.zygote=zygote64"
 
 
 def _patch_zygote64_cpio_payload(name, payload):
-    """命中 ramdisk build.prop 时追加/更新 ro.zygote=zygote64（文件尾追加，幂等）。"""
+    """命中 ramdisk build.prop 时追加/更新关键属性（文件尾追加，幂等）。"""
     if name != _RAMDISK_BUILD_PROP:
         return payload
-    if b"ro.zygote=" in payload:
-        return payload
-    return payload.rstrip(b"\n") + b"\n" + _ZYGOTE64_LINE + b"\n"
+    new_payload = payload.rstrip(b"\n")
+    if b"ro.zygote=" not in new_payload:
+        new_payload += b"\nro.zygote=zygote64"
+    if b"service.sf.prime_shader_cache=" not in new_payload:
+        new_payload += b"\nservice.sf.prime_shader_cache=0"
+    if b"ro.surface_flinger.prime_shader_cache.ultrahdr=" not in new_payload:
+        new_payload += b"\nro.surface_flinger.prime_shader_cache.ultrahdr=0"
+    return new_payload + b"\n"
 
 
 def _rewrite_hdr_filesize(hdr, new_size):

@@ -21,6 +21,9 @@ on post-fs-data
 # 永不监听 5555（宿主 adb offline）"的竞态。
 on early-init
     setprop service.adb.tcp.port 5555
+    # 规避 Mali DDK 在虚拟环境 primeShaderCache 打爆 171 (0xab) in-flight 任务门控导致 RenderEngine usleep 死循环
+    setprop service.sf.prime_shader_cache 0
+    setprop ro.surface_flinger.prime_shader_cache.ultrahdr 0
 
 on property:init.svc.adbd=running
     stop adbd

@@ -1,0 +1,37 @@
+# run128 cmar 死锁根因运行时取证（2026-10-15）
+# 取证路径：实例控制通道 POST /cmd {"type":"js","script":"cmd.exec(...,30000)"} + SSE /events
+# guest root（pioneer 域）→ SIGSTOP cmar → od 读 /proc/<tid>/mem
+
+## 现场
+SF=796  cmar tid=816  (mali-cmar-backe, stat=R 自旋)
+syscall = -1 0x7809f223f0 0x7ac90fda28   (stopped 态：sp=0x7809f223f0 pc=libc)
+libGLES_mali base (r--p) = 0x7812809000  (.text r-xp off=0x960000)
+
+## 栈 dump 1024B @ sp
+loop 帧 sp = 采样sp + 0x30（poll 返回地址 0x1cf2288 在 采样sp+0x28）
+loop_sp+0x10 pollfd[0] = 0x000100010000000a  → fd=10(mali) events=POLLIN revents=POLLIN
+loop_sp+0x18 pollfd[1] = 0x000000010000000b  → fd=11
+loop_sp+0x20 pollfd[2] = 0x000000010000000c  → fd=12
+loop_sp+0x28 pollfd[3] = 0x000000010000000d  → fd=13
+
+## obj 定位（4-fd 指纹扫描：obj[0]=0x0a obj[0x654..65c]=0x0b/0x0c/0x0d）
+obj = 0x7add066400  （scudo tag 已去，& 0x00FFFFFFFFFFFFFF）
+
+obj+0x000 = 0x0000000a   mali fd=10        ✓
+obj+0x654 = 0x0000000b   eventfd 11        ✓
+obj+0x658 = 0x0000000c   eventfd 12        ✓
+obj+0x65c = 0x0000000d   eventfd 13        ✓
+obj+0x6d0 = 0x00000000   budget = 0        ← 根因
+obj+0x6d4 = 0x00000000   pool capacity = 0 ← 根因
+
+## 死锁机制（逆向闭合）
+read 门控 0x1cf23f4-0x1cf2404：len = min(budget, 8) = min(0,8) = 0
+  → 0x1de4b10 __read_chk(fd, buf, 0) 恒读 0 字节
+  → 内核 event_list 146 个 atom 事件永滞留（atoms 表头 ec=146 wc=0 cj=0，全 St=4 从未消费）
+  → kbase_poll kbase_event_pending(event_count=146≠0) 恒返回 EPOLLIN
+  → poll(sp+0x10, 4fds, timeout=-1[0x32ff2d0]) 立返 POLLIN
+  → cbz budget=0 跳过 read → 回 poll → 死自旋（syscall=running，4s utime+86/stime+97 ticks）
+
+## 结论
+节点池（0x6d0 计数 + 0x6e8 分配计数 + 0x6d8 free-list + 0x6ec sem）从未播种/已耗尽，
+read 门控被 0 卡死。非内核事件语义问题、非丢唤醒、非超时自旋（poll timeout=-1 已排除）。

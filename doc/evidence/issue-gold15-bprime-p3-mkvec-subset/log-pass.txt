@@ -1,0 +1,26 @@
+== 1) run_matrix.py 全量 ==
+[PASS] fl_mkvec_wr  翻译 exit 2（预期 fail-loud=2）
+
+合计：114 PASS / 0 FAIL
+
+== 2) run_e2e.sh 真机 10 shader ==
+[OK]   bin-007f00037880 (fragment)  translate OK + val PASS
+
+E2E 总分：10/10 可译 + val PASS（另 0 个=记账：可译性未达标但原因已列明，不掩盖）
+
+== 3) mkvec 正例逐像素 ==
+逐像素比对：256x256，三角形内 7812 px、外 0 px（边界带跳过），失败 0
+
+== 4) 真机 vartex_real.bin 全链 ==
+      meta={'slot': 0, 'staging_register_count': 2, 'vector_size': 3, 'register_format': 3, 'staging_base': 0, 'staging_flags': 64, 'staging_bases': [0], 'target': 0}
+翻译完成：rg_vartex_real.frag.spv / rg_vartex_real.vert.spv（frag 4064B, vert 684B）
+spirv-val frag PASS
+spirv-val vert PASS
+
+== 5) 矩阵相关用例 ==
+[PASS] tex_real  val-only（stage=fragment）
+[PASS] vartex_real  val-only（stage=fragment）
+[PASS] mkvec  render exit 0
+[PASS] mkvec_neg  对照 render exit 1（预期失败）
+[PASS] fl_mkvec_i8  翻译 exit 2（预期 fail-loud=2）
+[PASS] fl_mkvec_wr  翻译 exit 2（预期 fail-loud=2）

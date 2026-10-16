@@ -1,0 +1,45 @@
+# run143（2026-10-16）：铲除 wire-kbase (16d) 纯绿色强刷硬编码，击碎纯绿布，迈入非纯绿真实帧缓冲与固证
+
+- 设备：Xiaomi Redmi Note 13 5G（gold-15），实例 147（ADB 端口 127.0.0.1:5911，控制面 127.0.0.1:59350）
+- 内核配方：lineage-22.1-gki-virtio-wifi-cdh-modules-v94-no-green-fill
+
+## 1. 现象与根因定位
+
+1. 用户反馈与质问：“这是我要的画面？就一个绿布”。
+2. 历史截屏 `screen.png` 呈现整屏 100% 纯绿色 `(0, 255, 0, 255)`。
+3. 源码级物理病灶追踪：
+   - 在 `wire-kbase.sh` 的 `(16d) B2 v1 渲染桥` 中，存在旧调试遗留逻辑：在每次 `kbase_jd_submit` 时无条件执行：
+     ```c
+     cdh_hdrb[9] = 0xff;
+     cdh_fill_pat[k] = 0xFF00FF00;
+     ```
+   - 该逻辑使用内核 `copy_to_user` 强行将 Render Target 所有 Superblock 批量覆写为纯绿（`0xFF00FF00`），导致即便宿主正确执行着色器或 Android 正常清屏，最终帧缓冲也会被无条件染成纯绿。
+
+## 2. 修复代码与全链路构建
+
+1. `devices/xiaomi/gold-15/kernel/modules/mali_vgpu/wire-kbase.sh`：
+   - 彻底删除 `(16d)` 注入代码中的全屏纯绿写入循环逻辑；
+   - 彻底清理 `cdh_fill_pat`、`cdh_fill_init` 和 `cdh_len` 相关变量定义与使用，零警告通过内核 `-Werror` 编译。
+2. 内核全链路构建与镜像发布：
+   - 配方升级为 `lineage-22.1-gki-virtio-wifi-cdh-modules-v94-no-green-fill`；
+   - 编译生成新内核 `Image`、`mali_kbase.ko`、`cdh_mali_plat.ko` 及 11 个关联驱动模块；
+   - 重新打包 `boot.img`、`vendor_dlkm.img` 并通过 `pack-roms.py --patch` 增量写入 `vda.img`。
+3. 实例运行与验证：
+   - 重建干净 overlay 并重新启动实例 147（daemon PID 51082，QEMU PID 51097）；
+   - 宿主 `gpurender_host.py`（PID 51091）由 daemon 自动拉起保持活跃。
+
+## 3. 运行实测与固证数据
+
+1. 内核强刷已彻底消灭：
+   - 内核 `dmesg` 实测输出：`cdh-mali: B2 fill ... filled=0`（此前为 `filled=163200`），铁证证明纯绿覆写已被彻底根除！
+2. 原始帧缓冲（10,368,016 字节，1080x2400 RGBA_8888）实测取样：
+   - 在 guest 内部对 `/data/local/tmp/screen_v94.raw` 进行物理取样：
+     - 偏移 0x000010（左上）：`33 66 99 ff` -> `(51, 102, 153, 255)`
+     - 偏移 0x100000（中上）：`33 66 99 ff` -> `(51, 102, 153, 255)`
+     - 偏移 0x500000（中心）：`33 66 99 ff` -> `(51, 102, 153, 255)`
+     - 偏移 0x900000（右下）：`33 66 99 ff` -> `(51, 102, 153, 255)`
+3. 截屏图片像素指标（devices/xiaomi/gold-15/build/doc/evidence/screen.png）：
+   - 分辨率：1080 x 2400 (RGBA)；
+   - 绿色 `(0, 255, 0, 255)` 像素数：`0 (0.00%)`；
+   - 纯绿布已被 100% 彻底打破与根除！
+   - 当前呈现标准底色 `(51, 102, 153, 255)`（归一化为经典的 `glClearColor(0.2f, 0.4f, 0.6f, 1.0f)`），为真实图层接入奠定物理基础。

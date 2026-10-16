@@ -1,0 +1,15 @@
+# B2 渲染桥 guest helper（gpumbox_bridge）保活：init 自恢复服务。
+# reboot 循环会杀死 adb/nohup 拉起的 helper（进程不随 reboot 存活，run106
+# 定案）→ 改由 init 拉起并**保持常驻**（非 oneshot：进程退出即重启）。
+# 注意：不挂 sys.boot_completed=1 trigger——gold-15 处于 watchdog 重启循环，
+# 该 property 的 action 不保证被执行（run108 实证 trigger 从未 processing）；
+# 与 auto_provision/keep_awake 同款走 class main 直起，失败即自重启重试
+# （早期 /proc/cdh_gpumbox 未就绪时 open 失败退出，重试即可）。
+# binary 由 build/vendor/patch/bin/gpumbox_bridge 打包进 vendor.img
+# （NDK 静态 aarch64，无依赖）。
+# SELinux：pioneer 域（与 setup_display 同域；gold 平台 permissive）。
+service gpumbox_bridge /vendor/bin/gpumbox_bridge
+    class main
+    user root
+    group root
+    seclabel u:r:pioneer:s0

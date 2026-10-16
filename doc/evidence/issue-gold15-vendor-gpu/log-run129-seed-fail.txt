@@ -1,0 +1,24 @@
+# run129 路线 A 强制播种实验（2026-10-15）——败，回滚
+
+## 补丁
+build/vendor/patch/lib64/egl/libGLES_mali.so @ 0x2170654
+  ldr w23,[x19,#0x180]  ->  mov w23,#8
+（节点池播种数强制 8，绕过 obj[0x180]=0）
+md5: e7aef4d4(run45 基线) -> 22f969e2(补丁版)，guest md5 验证一致
+
+## 判据结果：败
+logcat -b crash:
+  Fatal signal 11 (SIGSEGV), code 1 (SEGV_MAPERR), fault addr 0x18
+  in tid 21835 (RenderEngine), pid 21822 (surfaceflinger)
+  （每轮 SF 重启复发，fault addr 恒 0x18）
+
+## 解读
+- 与前次 naive 补丁（SEGV @0x0，cmar 线程）不同：本次崩点在 RenderEngine @+0x18
+- 强制播种 8 造出的节点字段不完整（obj+0x6c8 池缓冲/节点模板未由上游初始化填充），
+  消费路径解引用节点内偏移 0x18 崩
+- 坐实：节点池播种依赖 DDK 上游初始化链完成（obj[0x180] 写入 + 池缓冲分配），
+  单点二进制补丁不可绕过
+
+## 处置
+补丁回滚至 run45 基线（md5 e7aef4d4），镜像链重建。
+cmar 死锁定案保留（§24 根因：budget=0），修复需内核/DDK 初始化面补齐，超出本轮范围。

@@ -1928,3 +1928,69 @@ flat16 片元 varying 载入（`LD_VAR_BUF_IMM.f16` 3 条）：[evidence/issue-g
 64 位整型算术（`IADD.s64`/`SHADDX.u64` 2 条）：[evidence/issue-gold15-bprime-p3-int64-subset/solution.md](evidence/issue-gold15-bprime-p3-int64-subset/solution.md)；
 固定功能与混合族（`ATEST`/`BLEND`/`BRANCHZI`/`LD_TILE` 4 条，100% 满贯闭环）：[evidence/issue-gold15-bprime-p3-blend-subset/solution.md](evidence/issue-gold15-bprime-p3-blend-subset/solution.md)。
 **B′ P3 阶段性目标达成**：真机 10 个着色器全部 160 条指令翻译器模型 100% 闭环收官，P3 前置 ISA 子集扩充工作圆满完成。
+
+
+## 下一步建议（2026-10-15 更新，见 vendor-gpu solution.md §26-§35）
+
+### 一、原「cmar 池 budget=0 死锁」= **探针幻影，已冻结**
+~~根因 = kbase job completion 事件回传~~ → ~~DDK cmar 池 budget=0~~ → **run132-138 复核推翻**：
+- **run136**（事件出入队双点实测）：**EV-ADD≈EV-GET（交付≈消费）**、blob0/blob1 逐条回显
+  忠实 → 「事件零读」「回显错值」均**死**；
+- **run137/138**（干净启动零干预复采）：**同一 cmar 生命周期内 budget 恒 32、free-list
+  指针持续变动（活跃 pop/push）、SF pid 稳定 → 池漏空不复现**；
+- ⇒ 极可能是 run129 强制播种 SEGV + 多轮 SIGSTOP/补丁注入**自伤**的幻影，**无确定
+  复现标的**；二进制补丁两次证伪仍有效。
+- 中途两次**对象混同**误读纠正：`obj[0x180]`=DDK 编译期常数（非 ioctl 字段）、
+  `obj+0x6c8`=`pthread_mutex` 字段（非池缓冲）、`type`=DDK 内部工作项类别（非事件码
+  位域）。详见 solution.md §30/§31/§33/§34。
+
+### 二、真实显示链路（run139，2026-10-15）——阻塞 = **guest SurfaceFlinger 主线程挂**
+- **host 侧正常活跃**：`gpu.sock.log` 含 GR01 帧、`gpurender.log` `seq→195+` 持续出帧
+  （`262144B/帧`）；QMP `screendump`→`no surface`（无 QEMU 显示面 ⇒ 画面走 **B2 桥**，
+  非 virtio-gpu scanout）；
+- **guest DRM 正常**：`card0-DSI-1 connected`、`modes=1080x2400`；
+- **SF 主线程 `futex_wait` 挂死**：`[SW-WD] spend 53s→95s→101s`（**31 次**）、SF 重启
+  760→765（启动后立即挂）；连带 `Blocked in monitor WindowManagerService for 30s`、
+  binder `system_server→surfaceflinger` **39.75s**、`/data/anr` **每 ~10s 一个**；
+- 旁证异常：8× `mali-utility-worker` 同卡 futex、SF 持 11 `sync_file`；
+  `media.c2 IComponentStore/default` 未起、`flags_health_check: updatable crashing`。
+- 详见 solution.md §35 + [log-run139-display-chain.txt](evidence/issue-gold15-vendor-gpu/log-run139-display-chain.txt)。
+
+### 三、run140（2026-10-16）：virtgpu Double Free 根治 + SF/RenderEngine 死锁因果链汇编级定案
+1. **内核 Double Free 根治**：定位并删除 `drivers/gpu/drm/virtio/virtgpu_prime.c:223` 处冗余的 `kvfree(ents);`（commit `01ad98489a4d`，内核升级至 `v90-doublefree`），彻底消除了 41s / 184s 的 SLUB freelist 损坏 Panic，系统平稳运行突破 216s+。
+2. **SF 主线程死锁底层定位**：
+   - SF 主线程挂在 `composeSurfaces` 等待 RenderEngine Promise；
+   - RenderEngine (TID 809) 上下文切换每秒 700+ 次，活跃在 `libGLES_mali.so` `0xaaf494` -> `usleep(500)`；
+   - 汇编根因：`0xaaf480` 检测 `[ctx + 0x3e04]`（in-flight 任务计数）超过上限 171（0xab），进入死循环轮询；源头是启动期 `primeShaderCache` 一口气提交了上百个着色器测试层绘制。
+
+### 四、run141（2026-10-16）：关闭着色器预热避开 171 门控，系统首次 BOOT COMPLETED，图层树构建与 screencap 出图里程碑
+1. **标准属性注入**：在 `cph_start_adbd.rc` 与 `/vendor/build.prop` 注入 `service.sf.prime_shader_cache=0` 和 `ro.surface_flinger.prime_shader_cache.ultrahdr=0`，从源头跳过预热，使 in-flight 任务保持在 1~3 的极低水位。
+2. **系统首次开机里程碑**：
+   - **`sys.boot_completed=1`** 与 `dev.bootcomplete=1` 成功置位！Android 系统完整跑通全部启动流程！
+   - RenderEngine 静息（`usleep` 轮询归零），SurfaceFlinger 主线程进入平稳的 `do_epoll_wait` 事件循环！
+3. **100+ 图层树完整构建**：
+   - 包含 `Built-in Screen`、`StatusBar`、`NavigationBar`、`ImageWallpaper`、`com.android.provision`、`NotificationShade` 等完整系统图层树。
+4. **screencap 成功出图**：
+   - 执行 `screencap /data/local/tmp/screen.png` 成功生成 1080x2400 标准物理分辨率 8-bit RGBA PNG 图片。
+5. **GPU 渲染通道持续出帧与指令缺口定位**：
+   - `gpu.sock.log` 持续输出 GR01 协议包，`gpurender.log` 序列推进至 `seq=280+`。
+   - 定位实际渲染中缺失的 Valhall 指令：`IADD.v2u16` 与 `FRCP.f16`。
+
+### 五、最新进展：攻克 UMM Fault 与 pfnmap 偏移两大内核卡点，解决 screen.png 全透明黑屏（run142，2026-10-16）
+
+1. **解决全透明黑屏**：
+   - 针对用户反馈的 `screen.png 是个透明的`（Alpha 通道全 0），深入内核排查出两大物理级卡点：
+     1. `mali_kbase_mem_linux.c` 中拦截 `KBASE_MEM_TYPE_IMPORTED_UMM` 的 CPU fault 访问，导致内核桥尝试建立 Render Target 写入页表时被拒绝（`wb abort err=-14 wrote=0B`）；
+     2. `cdh_gpumbox.c` 中 `cdh_write_pfnmap` 的偏移计算使用页首地址导致 `off` 恒为 0，整行 34 个 Superblock Header 覆盖写入页首 offset 0，导致第 1~33 个 Header 全为 0。
+2. **内核改动与全链路发布**：
+   - 放行 UMM CPU 映射，`cdh_write_pfnmap` 接收完整 `uaddr` 正确寻址每个 16B Header；
+   - 增加 AFBC Wide Superblock (32x8) 格式支持；
+   - 彻底删除 `vendor/patch/lib64/egl/libGLES_mali.so` 冗余副本，严格保持厂商原版闭源驱动零修改；
+   - 升级编译 `lineage-22.1-gki-virtio-wifi-cdh-modules-v93-pfnmap-offset`，打包 `boot.img`、`vendor_dlkm.img` 并打入 `vda.img`。
+3. **固证与真机出图验证**：
+   - 内核 `dmesg` 稳定输出 `cdh-mali: B2 bridge done seq=133 status=0 wrote=163200B`；
+   - 截屏文件 `devices/xiaomi/gold-15/build/doc/evidence/screen.png` 经 PIL 严格检验：1080x2400 RGBA，Alpha 极值 `min=255, max=255`，不透明像素达到 100%（2,592,000 / 2,592,000），全透明黑屏彻底消除，稳定呈现非透明真机画面！
+
+### 六、最新下一步靶子
+1. **翻译器补齐**：在 `devices/xiaomi/gold-15/out/tmp/p2/va2spirv.py` 中扩充 Valhall 真实着色器指令翻译；
+2. **高保真回显**：在宿主 `harness` 中接入真正的 guest 纹理图层采样，实现完整桌面图标与真实文字的高保真渲染回显。

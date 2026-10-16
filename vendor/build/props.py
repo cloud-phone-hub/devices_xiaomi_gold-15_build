@@ -160,6 +160,10 @@ if vmissing:
     print("[err] /vendor/" + PATCH_PROP + " 缺以下键（改写表已过时？）: " + ", ".join(vmissing))
     sys.exit(1)
 
+# 规避 Mali DDK 在虚拟环境 primeShaderCache 打爆 171 (0xab) in-flight 任务门控导致 RenderEngine usleep 死循环
+blines.append("service.sf.prime_shader_cache=0")
+blines.append("ro.surface_flinger.prime_shader_cache.ultrahdr=0")
+
 with open(bpath, "w", encoding="utf-8") as f:
     f.write("\n".join(blines) + "\n")
 ''' % {"target": TARGET, "sets": SETS, "root": C_DST_DIR,

@@ -1,0 +1,49 @@
+# run134 播种时间线 + 真机池态对照（2026-10-15）——Scenario A 实锤：播种中断，池从未有过节点
+
+## 双机对照（决定性）
+| 字段 | 云机（obj=0x70c725d400/0x74ff157400 复现一致） | 真机（obj=0x7f31586400，TID=1175） |
+|---|---|---|
+| budget[0x6d0] | **0** | **0x20 = 32** ✓ |
+| cap[0x6d4] | 0 | 0 |
+| free-list 头[0x6d8] | **NULL（空）** | **0xb400007d2992c680（节点链在）** ✓ |
+| [0x6e0] | 0 | 0xb400007d2992b700（链指针） |
+| 0x6e8（播种记账） | 0x20 = 32（原封） | 0x20 = 32 |
+| 0x6ec | 0x40 = 64 | 0x7f64 |
+| obj+0x6c0..0x6cf（池缓冲/模板） | **全 0** | —（od * 折叠未定，run129 SEGV 已证模板必填） |
+
+## 判定（Scenario A 实锤）
+run130 的 step 0xe 写序：`0x6e8=32 先写 → 32×（alloc 0x48B + push free-list）→ budget=32 最后写`。
+云机实拍态（0x6e8=32 原封、freelist 空、budget=0、obj+0x6c8 池缓冲区全 0）**恰是
+"播种中断在 push 之前"的形态**；真机 = 播种完成态（budget=32、free-list 有节点）。
+⇒ **云机 cmar 池从未有过节点**，非"播了 32 个再漏光"（Scenario B 死）。
+
+**与 run129 互证**：强制 `mov w23,#8` 播种 → SEGV @节点+0x18（obj+0x6c8 池缓冲/节点
+模板未由上游初始化填充）——模板为空则 alloc 必然失败/中断，两现象同根。
+
+**排账全自洽**：出生即关（146 事件从未消费）、队列恒空（无节点可入队）、budget 无
+回绕（无 pop 活动）、0x6e8 原封（仅首写）——四观察零矛盾。
+
+## udata 对账线（本批并行收口：假说死）
+- uapi `base_jd_atom`（72B 槽）：seq_nr@0 / jc@0x08 / **udata@0x10·0x18** / core_req@0x34
+  ——与 (16c) 实拍 jc@0x08、core_req@0x34 逐字段吻合；
+- 内核链：kbase_jd_submit stride=72 → v1 路径（(12) v70 补丁）→ `copy_from_user(&user_atom,
+  user_addr, stride)`（(12c) 限长）→ jd_submit_atom:724 `katom->udata = user_atom->udata`
+  （@0x10/0x18 ✓）→ kbase_event_dequeue:91 `uevent->udata = kbase_event_process()` 原值回显。
+  **全链偏移对齐，udata/blob[1] 错位假说死**。
+
+## 根因链（最终形态）
+上游初始化（池缓冲 obj+0x6c8 / 节点模板填充）在云机未完成 ← 某初始化步骤依赖的
+内核交互（ioctl/ABI，UK 11.45 vs 11.46）被跳过/失败 → step 0xe 的 32 次 alloc 中断
+→ budget=32 收尾写未执行 → read 门 min(budget,8) 永关 → cmar 死自旋 → drawLayers 卡死。
+
+## 遗留（run135 靶子）
+1. **钉死池缓冲初始化步骤**：RE cmar-init 状态机中填充 obj+0x6c8 模板的步骤
+   （step < 0xe 的哪一步、消费哪个内核交互），对照真机为何云机被跳过；
+2. 修复面：内核侧补齐该初始化交互（对齐 UK 11.46 语义）；
+3. 0x6ec 云机 64 vs 真机 0x7f64 差异待解读（可能为 sem/容量语义，次要）。
+
+## 工具教训（补充 §28.5）
+- adb shell + su -c 双层引号：内层 `$` 须写 `\$`（外层 sh 提前展开 → `case in` 语法错）；
+- od `*` 折叠坑：全零行不出现，sed 按地址过滤会"漏行"——漏行=零区证据，须知此语义；
+- 时间线采样注意 init 窗口 <1s，0.4s 步进只能拍稳态；写序取证（run130）+ 终态
+  对照（本批）联合推断可替代亚秒采样。

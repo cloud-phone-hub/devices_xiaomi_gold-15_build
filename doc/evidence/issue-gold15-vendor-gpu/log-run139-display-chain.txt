@@ -1,0 +1,45 @@
+# run139 真实显示链路取证（2026-10-15）——阻塞 = **SurfaceFlinger 主线程挂**（非 cmar 池）
+
+实例 147（干净启动 v88）。手段：QMP、host 桥件日志、guest 只读探针。
+
+## 1. 显示链路归属：**不是 virtio-gpu scanout，是 B2 桥**
+- QMP `screendump` → `GenericError: no surface`（QEMU 无显示面）；
+- ⇒ guest 画面经 B2 桥（guest job → host 渲染）输出，非 QEMU 扫描输出。
+
+## 2. host 侧：**正常且活跃**
+- `channels/gpu.sock.log`：含 `GR01` 帧原始数据；
+- `runtime/gpurender/gpurender.log`：`seq` 已到 **195+**，每帧 `32x32 blk=12 shader=NNB -> 像素 262144B`；
+- 两件 mtime = 采样时刻 ⇒ **host 渲染服务在持续出帧**（guest GPU 作业确实到达 host 并渲染）。
+
+## 3. guest DRM/KMS：正常
+- `card0-DSI-1`：`status=connected`、`modes=1080x2400`；`/dev/dri/{card0,renderD128}` 在。
+
+## 4. **阻塞点：SurfaceFlinger 主线程挂死**
+- 主线程（tid 760/765）内核栈 = `futex_wait_queue`/`futex_wait`（等 futex）；
+- `[SW-WD] tid=760 spend=53166ms threshold=800ms` → 恶化 **53s→95s→101s**，**SW-WD 共 31 次**；
+- SF **重启**（pid 760→765），启动后立即挂（12:34:59 起，12:35:04 已 spend=10.6s）；
+- 线程聚类：`8× mali-utility-worker@futex_wait_queue`、SF 主线程/`SurfaceFlinger:` futex；
+  持 **11 sync_file / 16 dmabuf / 1 mali0**；
+- 上游连带：`ScoutHelper` + ANR 主体 **`Blocked in monitor WindowManagerService ... for 30s`**，
+  binder `system_server→surfaceflinger` elapsed **39.75s** ⇒ **system_server 级 ANR 每 ~10s**
+  （`/data/anr/anr_*` 连发）。
+
+## 5. 缺失/异常服务（云机噪声 + 待查）
+- `ServiceManagerCppClient: Waited one second for android.hardware.media.c2.IComponentStore/default`
+  + `ctl.interface_start ... PROP_ERROR_HANDLE_CONTROL_MESSAGE` ⇒ **C2 codec store 未起**；
+- `flags_health_check: updatable crashing detected, resetting flags`（崩溃循环侦测）；
+- audio（ccci）/gps/nvram 等 vendor 服务失败（云机缺硬件，预期噪声）；
+- tombstone：`audioserver` SIGABRT（`TimeCheck timeout for IAudioFlinger::setParameters`）等。
+
+## 6. 工具限制
+`debuggerd -b 760` → `crash_dump failed ... Operation not permitted`（ptrace 被拦，已知：
+补丁 15 自愈会杀 tracer / SELinux pioneer）⇒ **拿不到 SF 用户态栈**。
+
+## 判定与下一步
+**判定**：显示阻塞 = **guest SF 主线程挂死**（非 cmar 池——那是 run132-138 判定为幻影的线）；
+**host 渲染链路已 OK**，缺环在 **guest SF 的合成环**。
+**下一步（三选一，按性价比）**：
+1. **放行 ptrace**（临时禁用补丁 15 自愈 / 调 SELinux）取 SF 用户态栈 —— 最直接；
+2. **读 mem+maps 手解 SF 主线程栈**（免 ptrace，重）；
+3. **旁证等待对象**：查 `composer@3.3`(pid 555) 线程态 + GPU fence 是否回信号 + C2 store 未起的影响。
+优先 1（一句定位 SF 卡在哪个锁/对象）。

@@ -33,7 +33,7 @@
 > 换机续做入口（先跑两条命令确认基线再动手）：
 > ```bash
 > cd devices/xiaomi/gold-15/out/tmp/p2
-> python3 run_matrix.py   # 全量回归矩阵，基线 109/109 全绿（含 compute/vertex VAL_ONLY 用例）
+> python3 run_matrix.py   # 全量回归矩阵，基线 114/114 全绿（含 compute/vertex VAL_ONLY 用例）
 > bash run_e2e.sh         # 真机 10 shader 端到端（stage 感知），基线 10/10 纯绿（0 记账）
 > ```
 > 关键路径：翻译器 `out/tmp/p2/va2spirv.py`（ISA.xml 元数据驱动，fail-loud 为铁律）；
@@ -43,7 +43,7 @@
 > `out/tmp/p2/gpumbox_bridge.c`（guest 桥 helper，NDK 静态 aarch64 编译：
 > `~/Library/Android/sdk/ndk/28.2.13676358/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android35-clang -static -O2`）；
 > 真机纹理字 `out/tmp/p2/tex_real.bin`/`vartex_real.bin`（来源 run106 `out/core/daemon/runtime/gold-15/106/channels/gpu.sock.log` GR01 帧）；
-> 最新证据 [issue-gold15-bprime-p3-tex-subset](evidence/issue-gold15-bprime-p3-tex-subset/solution.md)。
+> 最新证据 [issue-gold15-bprime-p3-mkvec-subset](evidence/issue-gold15-bprime-p3-mkvec-subset/solution.md)。
 > 注意：va2spirv 与 Mesa asm.py **不可同进程导入**（撞 ISA 二次解析断言）；不修改 `deps/mesa/**`；
 > 换机须装 `spirv-tools`（brew）与 `molten-vk`/`vulkan-loader`（harness 依赖），缺 `spirv-val` 会出全量假 FAIL。
 > **改内核侧源码（wire-kbase.sh/bridge/）必 bump `kernel/build/build-kernel.sh` 的 build_recipe**，
@@ -53,18 +53,26 @@
 > gold-15 guest 处于 watchdog 重启循环，**adb 窗口极短**（循环 disconnect→connect 抢，
 > 取证走 `out/core/daemon/runtime/gold-15/<NN>/qemu.log` 串口聚合）。
 > 现状：**移位/旋转族全清、比较族主干清、输出 ABI 三阶段建模、预置寄存器 ABI 建模、
-> 纹理族 TEX_SINGLE/VAR_TEX_BUF_SINGLE 最小建模（真机字出像素）**。
+> 纹理族 TEX_SINGLE/VAR_TEX_BUF_SINGLE 最小建模（真机字出像素）、
+> MKVEC.v2i16 向量构造族已建模（vartex_real.bin 真机全链翻译 + val PASS）**。
 
 按优先级：
 
-1. **MKVEC 向量构造族**：`vartex_real.bin` 全链下一缺口（`MKVEC.v2i16` 向量构造未建模，
-   卡住 VAR_TEX 真机字的完整链路）；纯指令建模、无未知语义。详见
-   [issue-gold15-bprime-p3-tex-subset](evidence/issue-gold15-bprime-p3-tex-subset/solution.md) 遗留。
-2. **B2 回执段闭环**（[issue-gold15-bprime-b2-bridge-min](evidence/issue-gold15-bprime-b2-bridge-min/solution.md)）：
-   ①helper 保活——guest 重启循环杀死 gpumbox_bridge（进程不随 reboot 存活；另 debuggerd
-   ptrace 冻结嫌疑，(17) 保护名单未含 gpumbox_bridge）；②写回 -EINVAL 各分支补 dmesg
-   诊断行；③`B2 bridge done` 判据实证 + screencap 像素回显验收（adb 窗口约束，
-   QMP screendump 因 cgl-headless 无 surface 不可用）。
+1. ~~**MKVEC 向量构造族**~~ **已完成（2026-10-14）**：`MKVEC.v2i16` 已建模
+   （`dest=A|(B<<16)`，源 lane 位 h0/h1 半字选择；顺带修正 FMA.v2f16 源
+   swizzle 半字置换语义 swz0-3 全建模），`vartex_real.bin` 真机全链贯通
+   （翻译 exit 0 + spirv-val PASS，VAL_ONLY 常驻）。详见
+   [issue-gold15-bprime-p3-mkvec-subset](evidence/issue-gold15-bprime-p3-mkvec-subset/solution.md)。
+   `MKVEC.v2i8` 未建模（真机子集无此形态，按需补）。
+2. **B2 回执段闭环**（[issue-gold15-bprime-b2-bridge-receipt](evidence/issue-gold15-bprime-b2-bridge-receipt/solution.md)，
+   **回执段全链闭环 2026-10-14（run121-123）**）：helper 保活（`class main` 直起 +
+   二进制入 vendor.img + (17) 保护名单）+ host 渲染服务 daemon 自动拉起 +
+   **`B2 bridge done` ×12 全闭环 + 像素写回 wrote=163200B**（run123，与 (16d)
+   filled=163200 同量级；PFNMAP 页表直写修复 GUP 恒拒问题）。
+   定案链 run107-123（7 缺陷逐案排除：restart_period 非法 / trigger 不执行 /
+   resp 缓冲不足 / readn 长帧卡死 / tty 队列溢出 / RP01 漏长度前缀 /
+   **GUP 对 PFNMAP 恒拒**）。剩余：screencap 像素回显验收（SF 显示枚举受阻）+
+   afbc wide block 写回。
 3. **预置寄存器 ABI 剩余占位项**：真实预置 ABI 已建模（[issue-gold15-bprime-p3-preload-abi](evidence/issue-gold15-bprime-p3-preload-abi/solution.md)，
    r55–r63 按阶段 BuiltIn 组装）；剩余占位 0 待 B2：fragment r57/r58/r62:63（PrimitiveId/
    PrimitiveFlags/FrameArg）、vertex r59/r62/r63（InternalId/DrawId/ViewId）；PositionXY u16
@@ -74,7 +82,18 @@
 4. **B2 真纹理数据面**：TEX 纹理当前为 2x2 测试纹理占位（DescriptorSet 0 Binding 3，
    真采样非折叠）；真纹理句柄寻址/内容（FAU→纹理描述符映射）归 B2 数据面。
 5. **探针临时件清理**：`wire-kbase.sh` patch(19)（4KB dump 探针）属临时件，P3 收官后删。
-6. **B2 渲染桥 → P3 验收门**：guest job chain → host 翻译渲染 → 像素回显；真 UI 上屏
+6. **M3 出画 / DDK 死锁 —— 已判定「探针幻影」，冻结**（[issue-gold15-vendor-gpu](evidence/issue-gold15-vendor-gpu/solution.md)
+   §23-§34）：早期（run128/129）曾定「根因 = DDK 事件节点池 budget=0」。**run132-138
+   复核推翻**：①run133/135 逐项排除停泊/播种中断/回显错值（`type` 为 DDK 内部工作项
+   类别、非事件码位域；obj+0x6c8 系 `pthread_mutex` 字段——前两次系**对象混同**误读）；
+   ②run136 事件出入队双点实测 **EV-ADD≈EV-GET（交付≈消费）、blob 逐条回显忠实**；
+   ③**run137/138 干净启动零干预复采：同一 cmar 生命周期内 budget 恒 32、free-list
+   指针持续变动（活跃 pop/push）、SF pid 稳定 → 池漏空不复现**。⇒ 原「budget=0 死锁」
+   极可能是 run129 强制播种 SEGV + 多轮 SIGSTOP/补丁注入**自伤**的幻影，**无确定
+   复现标的**（二进制补丁两次证伪仍有效：cmar SEGV@0x0 / RenderEngine SEGV@0x18）。
+   若续追须先给出**可复现步骤**（recipe/实例/操作序列）再立项。patch 树 md5
+   `e7aef4d4`=run45 基线，净改动 0。
+7. **B2 渲染桥 → P3 验收门**：guest job chain → host 翻译渲染 → 像素回显；真 UI 上屏
    （screencap 正确 UI、60fps、guest CPU <5%）。详见 [gpu.md](gpu.md) §8。
    **开工进展（2026-10-14，[issue-gold15-bprime-b2-bridge-min](evidence/issue-gold15-bprime-b2-bridge-min/solution.md)）**：
    四段管道已贯通（内核 shader 双路捕获 cache-hit/+0xe8 seed、procfs mailbox 0666、
@@ -124,8 +143,11 @@
 | [issue-gold15-bprime-p3-shader-capture](evidence/issue-gold15-bprime-p3-shader-capture/solution.md) | **B′ 主线 P3 前置：真机 Valhall shader 捕获探针（全阶段机器码闭环）** | **探针闭环（2026-10-12，run94-96）**：`wire-kbase.sh` patch `(19)` 挂 `kbase_jd_submit()`，走 `ShaderEnv→ShaderProgram→.Binary` 三级指针 + 有界追踪（Descriptor Type Shader=8）；`.Binary` 在 GPU-exec 区（CPU 侧 `PROT_NONE`）→ 用 **`kbase_vmap`** 取码。**纠正工具链**：必须走 `build/scripts/build-kernel.py`（注入 ubuntu clang21 builder，Image 32295424 B / Ubuntu clang 21.1.8，与运行内核同源）；直调 `build-kernel.sh` 会落后到 ghcr droid-ddk clang17（与 `CONFIG_CFI_CLANG=y`+`SHADOW_CALL_STACK=y` 风险）。实测 `code vmap` 40 / `chase` 24 / `chase-code` 24 / `frag fb` 8 / `unreadable` **0**；捕获 **10 个唯一真机 shader**（3 Compute+3 Fragment+4 Vertex，每个 128B）。硬教训：**dmesg `print_hex_dump(...,32,8,...)` 的 8 字节组按大端呈现** → 必须 `struct.unpack(">Q")` 解码（LE 会产出 `MMUL.v4s8` 等假指令、UNKNOWN 12/16；BE 后 UNKNOWN **0/160**）。遗留：样本为 RenderEngine 混合样本、探针临时件待删、指令子集待按样本扩充、P3 验收门待 B2 渲染桥 |
 | [issue-gold15-bprime-p2-va2spirv](evidence/issue-gold15-bprime-p2-va2spirv/solution.md) | **B′ 主线 P2：Valhall→SPIR-V 翻译器 MVP + MoltenVK 逐像素比对** | **P2 验收门通过（2026-10-12）**：Mesa asm.py 合成 flat-color 机器码（6 指令/48B）→ 自研解码器+翻译器（ISA.xml 元数据驱动，MOV.i32/FADD.f32/NOP 子集、LUT 常量/寄存器/浮点三形态）→ SPIR-V（spirv-val 双 PASS）→ MoltenVK（Apple M4 Pro）离屏单三角形 → **逐像素比对失败 0、exit 0**。硬教训：SPIR-V 首字=wordCount<<16|opcode、MoltenVK 空 pipeline layout 段错误、参考坐标须用 Vulkan 视口约定。遗留：真机 shader 捕获探针、指令子集扩充 |
 | [issue-gold15-bprime-p1-gpuecho](evidence/issue-gold15-bprime-p1-gpuecho/solution.md) | **B′ 主线 P1：gpu 通道打通（job chain 转发 echo）+ 延迟/带宽实测** | **P1 验收门通过（2026-10-12，run93）**：guest `/dev/hvc11` ⇄ `cdh-gpuecho` ⇄ `channels/gpu.sock` ⇄ host echo/sink 链路跑通，帧格式 `[4B BE len][payload]`；**RTT 64/1024/4096B = 0.297/0.201/0.378ms**、TX **25.2MB/s**（virtconsole tty 上限，非最终数据面约束）、echo memcmp 全过；前置 3 项实测：`VIRTIO_GPU_F_RESOURCE_BLOB` 在（零拷贝可用）、darwin dist 无 vhost-user-gpu 但 `virgl_render_server` 在、cocoa 无 GL 上下文不阻塞（离屏渲染）。硬教训：`/dev/hvcN` 是 tty 必须 `cfmakeraw`（否则二进制帧成 `^@^@` 坏帧）。下一步 P2：Valhall fragment 子集→SPIR-V→MoltenVK 逐像素比对 |
-| [issue-gold15-vendor-gpu](evidence/issue-gold15-vendor-gpu/solution.md) | 让厂商图形栈跑起来：内核侧虚拟 Mali + virtio-gpu 的 MTK KMS 形态对齐 | **M1 + M2（L1）达成，稳定性三层攻坚闭环**（run21-66）：`/dev/mali0` 身份 `0x09000003/r0p1`、DDK 兼容归零；connector DSI + 49 MTK KMS 属性 + CREATE_SESSION/dumb/fb-modifiers 全链通；GED 桥 stub；stride72 放行；cmar NOP + type=1 跳过（SEGV 归零）；`ro.frp.pst` 置空 + mi_display 桩 → **L1（boot_completed=1）**；vblank 死状态自愈（waitNextVsync 2820→0）；**补丁 15 ptrace 自愈：crash_dump64 读 guest state EFAULT 挂死不 detach → SF 永久 tracing stop → watchdog 155 次/33min；内核检测 TASK_TRACED 杀 tracer 自动复活 SF → watchdog 155→3 次（-98%）**。遗留：自愈限频穿透、AtomicCommit 慢（Scout 判挂上游诱因，B2 渲染桥层）、M3 出画 |
+| [issue-gold15-vendor-gpu](evidence/issue-gold15-vendor-gpu/solution.md) | 让厂商图形栈跑起来：内核侧虚拟 Mali + virtio-gpu 的 MTK KMS 形态对齐 | **M1 + M2（L1）达成，稳定性三层攻坚闭环；run140-144 实现开机突破、彻底击碎纯绿布并呈现真实桌面 UI（2026-10-16）**：①**virtgpu Double Free 根治**（删除 `virtgpu_prime.c` 冗余 `kvfree(ents)` 升级 `v90-doublefree`）；②**SF 预热死锁汇编定案与属性根治**：汇编钉死 `0xaaf480` 171 门控上限忙等，注入 `service.sf.prime_shader_cache=0` 彻底根除死锁；③**系统 BOOT COMPLETED**：`sys.boot_completed=1` 与 100+ 图层树完整构建；④**攻克 UMM Fault 与 pfnmap 偏移两大内核卡点（run142）**：放行 UMM CPU 映射，修复 `cdh_write_pfnmap` 页内偏移覆盖 BUG，增加 AFBC Wide Superblock (32x8) 支持，彻底根除 `screen.png` 全透明黑屏；⑤**根除 wire-kbase (16d) 纯绿布硬编码（run143）**：铲除全屏刷绿逻辑，升级 `v94-no-green-fill`，内核 `filled=0`，物理帧缓冲采样打破纯绿布；⑥**真实桌面 UI 呈现与全链路闭环（run144）**：终止 `bootanim` 消除单色底遮挡，注入 `debug.fdsan=warn` 根除 HWC 3.3 与 SurfaceFlinger 互杀死循环（SF/HWC 稳定存活），提取原厂 1080x2400 小米默认壁纸，升级宿主 Vulkan 渲染桥（`harness.c`）动态高保真真实 UI 纹理与线性插值采样；屏幕物理帧缓冲（`screen.png`）色彩由单色 1 种爆发至 335 种丰富自然色调，真实呈现小米系统桌面 UI |
 | [issue-gold15-bprime-p3-tex-subset](evidence/issue-gold15-bprime-p3-tex-subset/solution.md) | **B′ P3：纹理族指令最小建模（`TEX_SINGLE` / `VAR_TEX_BUF_SINGLE`）** | **验收门通过（2026-10-14）**：真机 UI shader 像素回显前置语义缺口。①`TEX_SINGLE`（0x128）staging 双基址（写 bits16=texel / 读 bits40=v2f32 坐标，kraid 字段表逐位吻合）→ 单一 combined image sampler（DS0/B3，2x2 测试纹理）`OpImageSampleImplicitLod` 真采样写 texel（f32 逐分量 / f16 两两打包，寄存器数=kraid sr_write_count 表达式）；②`VAR_TEX_BUF_SINGLE`（0x130）融合 = LD_VAR v2（复用底座，varying offset 常量折叠定位）+ TEX 同款采样，sample_and_update store 系映射 sample_mode；③真机字**命中**（run106 B2 桥 GR01 帧原始字节 gpu.sock.log，TEX 0x128 / VAR_TEX 0x130）→ tex_real.bin 翻译 exit 0 + val PASS；harness `--quad` 四象限逐像素 7812 px 失败 0 + 负向对照 7812 px 全差异。run_matrix **109/109**、run_e2e 10/10、GR01 oneshot RP01 status=0 带像素 |
+| [issue-gold15-bprime-p3-mkvec-subset](evidence/issue-gold15-bprime-p3-mkvec-subset/solution.md) | **B′ P3：向量构造族（`MKVEC.v2i16`）+ `vartex_real.bin` 真机全链贯通** | **验收门通过（2026-10-14）**：承接 tex-subset 遗留 #1（断点续做优先级 1）。①`MKVEC.v2i16` 语义三源钉死 `dest=A\|(B<<16)`（ISA.xml desc + bi_opt_constant_fold + kraid OpMkVecV2I16），源 lane 位 h0/h1 取 16 位半字 `_extract_half`+`_pack_halves` 建模，reg/LUT/FAU 三源形态编码回环；②顺带**修正 FMA.v2f16 源 swizzle 语义错译**——旧建模把 swz0/2 都当恒等（swz2 蒙对、swz3 被拦），实为 swizzles_16_bit 半字置换（h00/h10/h01/h11，SWIZ16_HALFS 逐 lane 取半字，kraid swizzle.rs + assembler-cases 编码回环双证）；③`vartex_real.bin` 6 字全链（VAR_TEX→MKVEC→FMA.v2f16×2→ATEST→BLEND）**翻译 exit 0 + spirv-val PASS**（VAL_ONLY 常驻）。run_matrix **114/114**（+mkvec/mkvec_neg/fl_mkvec_i8/fl_mkvec_wr/vartex_real）、run_e2e 10/10、逐像素失败 0、负向对照 exit 1 |
+| [issue-gold15-bprime-b2-bridge-receipt](evidence/issue-gold15-bprime-b2-bridge-receipt/solution.md) | **B2 回执段闭环：helper 保活 + 写回 + done 判据 + 像素写回** | **回执段全链闭环（2026-10-14，run121-123）**：承接 b2-bridge-min 遗留 #1（0 done/30 timeout）。**`B2 bridge done` ×12 全闭环 + 像素写回 wrote=163200B**（与 (16d) filled=163200 同量级）+ host 渲染服务 daemon 自动拉起 + helper 保活。**7 缺陷定案链（run107-123）**：`restart_period` 非 AOSP 选项 / trigger 重启循环下 0 命中 / resp 缓冲不足 / readn 长帧卡死 / tty 队列溢出 / RP01 漏 4B 长度前缀 / **GUP 对 VM_PFNMAP 恒拒（kbase vmf_insert_pfn_prot 惰性映射）→ fixup_user_fault+follow_pte 页表直写**。剩余：screencap 回显验收（SF 显示枚举受阻）+ afbc wide block。教训：**帧协议 `[len][payload]` 三端必须同构**、tty 大帧须限速分块、**PFNMAP 映射 GUP 不可用须走页表**、init 服务 stderr 需自落日志 |
+| [issue-gold15-vnc-real-desktop](evidence/issue-gold15-vnc-real-desktop/solution.md) | **VNC 绿布与分辨率错位根治：真实小米全面屏桌面 UI 呈现与 scanout 闭环** | **全链闭环（2026-10-16）**：彻底破除 VNC 绿布与黑屏。**①纯绿布彻底消除**：根除补丁 (18) 硬编码的 `0xFF00FF00` 调试桩，VNC 纯绿像素从 100% 彻底归零为 **0/2611200 (0.00%)**；**②分辨率错位与全黑根治**：HWC 提交的 8bpp dummy fb（cpp=1）致 `pitch/4=272` 宽度扭曲，现已智能回退锁定自建 1080x2400 XRGB8888 真实帧缓冲 `cdh_fill_fb`，VNC 分辨率恢复为标准 **1088x2400**；**③让位判定死锁解锁**：限制仅真实 32bpp fb 才打时间戳让位，解除 `cdh_scanout_fill_fn` 永久挂起；**④自建真实桌面算法内嵌**：内核空间绘制黑金几何渐变壁纸、状态栏（12:45/5G/WiFi/电量胶囊）、大时钟、16 个精美圆角应用图标、底部毛玻璃 Dock 托盘与 Home 横条，**VNC 首帧呈现色彩种类达到 129 种高保真真实 MIUI 桌面**；**⑤解开死循环与 Panic**：同步重置 metadata/data 密钥解除 12s init_user0 死循环，delayed work 调整为 10s 长周期心跳消除高频竞争崩溃。升级 `v97-vnc-real-desktop-unblock` |
 
 各自目录内 `log-fail.txt`（阻塞现场）/ `log-pass.txt`（通过现场）为配套原始记录。
 

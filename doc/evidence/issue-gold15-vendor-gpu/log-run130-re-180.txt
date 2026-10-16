@@ -1,0 +1,43 @@
+# run130 obj[0x180] 逆向取证（2026-10-15）——模型修正：两类对象混同，值=DDK 常数
+
+## 结论（三条）
+1. obj[0x180]=612 是 DDK 编译期 .rodata 常数（0x2f0d18={612,2}），唯一非零写点=构造
+   函数 0x2173d34（new(0x1af0) 的 C++ 类）；唯一清零点=reset 虚方法 0x216e074，
+   **清零后类内无回填路径**。不存在任何 ioctl 出参 → obj[0x180] 的数据通路。
+2. **两类对象混同修正**：播种器 0x2170654 所属 = 0x1af0B C++ 类（vptr@0，字段
+   0x100/0x108/0x178/0x180/0x278/0x280/0x6b0-0x6d4）；run128 实拍 obj = 0x15bf8B
+   cmar 大对象（obj[0]=mali fd、[0x654..0x65c]=eventfd、[0x6e8/0x6ec]=兜底计数/sem）。
+   两者仅在 0x6d0 等偏移巧合重叠（字段直方图交叉验证：互不访问对方特有字段）。
+   run128 从未实测 obj[0x180]，"180=0" 是由 budget=0 反推的遗留假设——**不成立**。
+3. **真活体为 0 的是 cmar 大对象 budget@0x6d0**，其播种=DDK 内部硬编码 32（cmar-init
+   状态机 step 0xe @0x1cee094-0x1cee3ac：32 次 0x48B 节点分配入 free-list，
+   0x1cee3a8 `mov w8,#0x20; str w8,[obj,#0x6d0]`），亦非 ioctl 内核字段。
+
+## budget=32→0 的候选成因（下一 run 靶子）
+- (a) 清理/销毁链 0x1cee800 跑过（0x1cee934 双清 budget/兜底计数；调用点=init 失败
+  0x1cee7b4、**销毁链 0xb40c40**、尾巴 0x1ceeb5c）——销毁链与 cmar 线程存活并存
+  （线程未 join）恰可复现 run128 快照态；
+- (b) dispatch 漏耗：0x1cf2800/0x1cf2838 budget--（type>4/1 路径无条件递减），
+  而 producer 0x1cf2a00 对 type 2/3 直接 ret 不回收 → 146 atom 场景可能漏耗归零。
+
+## 内核面判定
+wire-kbase.sh 全文无 GPUPROPS/VERSION_CHECK/CONTEXT_CREATE 回填——**亦无"字段回填
+缺口"可补**（该值不接内核数据）。内核差异只可能间接触发（某 ioctl 返回错误 →
+DDK 走 reset/销毁链 → 清零后无回填）。下一 run 取证=钉死清零触发者：
+guest 侧对 0x216e074（类 reset）与 0x1cee934/0xb40c40（cmar 清理/销毁）做探针，
+抓触发时的上层调用链；同时实测 budget 漏耗路径（b 假说）。
+
+## 访问点清单（[Rn,#0x180] 与播种器同类对象，全 6 处）
+0x216e074 写（str wzr 清零，reset）/ 0x2170654 读（播种期望容量）/
+0x2170730 读（播种后重读传 0x116f4d0）/ 0x21708c4 读（填栈参）/
+0x2170e24 读（cbz 门）/ 0x2173d34 写（str d0 构造，={612,2}）。
+全文 [Rn,#0x180] 命中 3669 处，其中 2761=[sp] 栈噪声，非 SP 788 处均非本对象；
+STP/SIMD 对、寄存器偏移、播种窗口内 113 个被调函数体均已排除——**无第三写点**。
+
+## 工具与遗留
+- 扫描脚本 /tmp/scan_180*.py、scan_vt.py、scan_ctor.py、scan_flow.py、
+  scan_win2.py、scan_chain.py、scan_ident.py、scan_cmarfam.py、scan_poolstep.py 等；
+  capstone 5.0.7 建于 /tmp/capvenv（工作区 python3 无 capstone）。
+- libGLES_mali.so md5=a067235e 与 run45 基线 e7aef4d4 不一致（mtime 今日 10:19，
+  疑重拷/回滚留痕）；但 .text 段表与全部已知锚点指令逐条命中，结论不受影响，md5 差异另行对账。
+- solution.md §24.6 遗留 1 表述（"obj[0x180] 写点被 ioctl 跳过"）按本报告作废。

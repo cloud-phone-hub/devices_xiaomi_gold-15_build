@@ -71,11 +71,13 @@
     "build-prop-unsets": [],
     "selinux-labels": {
       "bin/daemon": "u:object_r:pioneer_exec:s0",
+      "bin/gpumbox_bridge": "u:object_r:pioneer_exec:s0",
       "bin/logcat-dump": "u:object_r:system_file:s0",
       "bin/netmgr_setup": "u:object_r:pioneer_exec:s0",
       "bin/setup_display.sh": "u:object_r:system_file:s0",
       "etc/init/cph_daemon.rc": "u:object_r:system_file:s0",
       "etc/init/cph_disable_provision.rc": "u:object_r:vendor_file:s0",
+      "etc/init/cph_gpumbox_bridge.rc": "u:object_r:vendor_file:s0",
       "etc/init/cph_logcat_dump.rc": "u:object_r:vendor_file:s0",
       "etc/init/cph_start_adbd.rc": "u:object_r:vendor_file:s0",
       "etc/init/netmgr.rc": "u:object_r:vendor_file:s0",

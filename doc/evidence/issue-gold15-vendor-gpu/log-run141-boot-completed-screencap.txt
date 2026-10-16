@@ -1,0 +1,62 @@
+=== run141 Boot Completed and Display Pipeline Breakthrough Evidence ===
+Date: 2026-10-16
+Instance: 147
+
+1. Properties Injected
+----------------------------------------
+service.sf.prime_shader_cache=0
+ro.surface_flinger.prime_shader_cache.ultrahdr=0
+
+Injected via:
+1) devices/xiaomi/gold-15/build/vendor/patch/etc/init/cph_start_adbd.rc (on early-init)
+2) devices/xiaomi/gold-15/build/vendor/build/props.py (appended to /vendor/build.prop)
+
+Active Properties Verified:
+[ro.surface_flinger.prime_shader_cache.ultrahdr]: [0]
+[service.sf.prime_shader_cache]: [0]
+[sys.boot_completed]: [1]
+[dev.bootcomplete]: [1]
+
+2. SurfaceFlinger & RenderEngine Health
+----------------------------------------
+RenderEngine (TID 819):
+  voluntary_ctxt_switches: 201 (stable, spinloop eliminated)
+  Status: Sleeping on task condition variable, zero usleep polling.
+
+SurfaceFlinger Main Thread (TID 792):
+  voluntary_ctxt_switches: 865 -> 869 (actively processing events)
+  Kernel Stack:
+    [<0>] do_epoll_wait+0x7b0/0x83c
+    [<0>] __arm64_sys_epoll_pwait+0xd0/0x180
+  Status: Successfully entered normal Looper/epoll event loop.
+
+3. Complete Layer Hierarchy Constructed (dumpsys SurfaceFlinger --list)
+----------------------------------------
+Display:
+  Display 4627039422300187648 (HWC display 0): port=0 pnpId=MTK displayName="MTKDEV"
+  RequestedLayerState{Display 0 name="Built-in Screen"#41}
+
+Key System Layers (100+ total layers):
+  RequestedLayerState{StatusBar#96 parentId=92}
+  RequestedLayerState{NavigationBar0#95 parentId=88}
+  RequestedLayerState{fcfab9f com.miui.miwallpaper.wallpaperservice.ImageWallpaper#78 parentId=77}
+  RequestedLayerState{25afc1e com.android.provision/com.android.provision.activities.DefaultActivity#81 parentId=76}
+  RequestedLayerState{e130905 NotificationShade#90 parentId=89}
+  RequestedLayerState{5a169f0 InputMethod#101 parentId=103}
+
+4. Successful Screen Capture
+----------------------------------------
+Command: screencap /data/local/tmp/screen.png
+Host Inspection:
+  file screen.png: PNG image data, 1080 x 2400, 8-bit/color RGBA, non-interlaced
+  Dimensions: 1080 x 2400 (Native full HD resolution matching Redmi Note 13 5G)
+  Size: 10195 bytes
+
+5. Host GPU Render Pipeline
+----------------------------------------
+Host GPU Render (gpurender_host.py):
+  Receiving live commands from guest (channels/gpu.sock.log GR01 frames).
+  gpurender.log sequence reaches seq=280+ (active draw calls from SurfaceFlinger & applications).
+  Identified shader translator instruction gaps for real HyperOS 2 UI rendering:
+    - IADD.v2u16
+    - FRCP.f16

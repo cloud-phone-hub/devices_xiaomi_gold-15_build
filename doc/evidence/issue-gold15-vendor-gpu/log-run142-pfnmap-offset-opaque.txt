@@ -1,0 +1,35 @@
+# run142（2026-10-16）：攻克 UMM Fault 拦截与 pfnmap 寻址两大内核卡点，解决 screen.png 全透明黑屏，真机渲染并固证
+
+- 设备：Xiaomi Redmi Note 13 5G（gold-15），实例 147（ADB 端口 127.0.0.1:5911）
+- 内核配方：lineage-22.1-gki-virtio-wifi-cdh-modules-v93-pfnmap-offset
+
+## 1. 现象与日志分析
+
+1. 用户反馈：`devices/xiaomi/gold-15/build/doc/evidence/screen.png 是个透明的`。
+2. 历史截屏 Alpha 分量均为 0，在看图软件或浏览器中显示为透明黑屏。
+3. 内核写回诊断日志追踪：
+   - 阶段 1：`kbase Invalid CPU access to UMM memory` -> `wb abort err=-14 wrote=0B`。
+   - 阶段 2：`wrote=163200B` 仍出黑屏，经逐字节探针发现 `cdh_write_pfnmap` 中使用的偏移计算 `off = page_addr & (PAGE_SIZE - 1)` 导致 `off` 恒等于 0，整行 34 个 Superblock Header 被全部覆盖到页首 offset 0 处，导致第 1~33 个 Header 全为 0。
+
+## 2. 修复代码与构建
+
+1. `mali_kbase_mem_linux.c`：放行 `KBASE_MEM_TYPE_IMPORTED_UMM` CPU fault。
+2. `cdh_gpumbox.c`：
+   - 修复 `cdh_write_pfnmap`：接收完整 `uaddr`，`off = uaddr & (PAGE_SIZE - 1)` 正确寻址每个 16B Superblock Header。
+   - 增加 Wide Superblock 支持（32x8）：`sb_w = (flags & CDH_BRIDGE_FLAG_WIDE_SB) ? 32 : 16; sb_h = (flags & CDH_BRIDGE_FLAG_WIDE_SB) ? 8 : 16;`。
+3. 清理 `devices/xiaomi/gold-15/build/vendor/patch/lib64/egl/libGLES_mali.so`，确保保持厂商原版驱动零篡改。
+4. 构建发布：`build-kernel.py` 产出 `Image`，`build-boot.py` 打包 `boot.img`，`build-vendor_dlkm.py` 打包 `vendor_dlkm.img`，`pack-roms.py --patch` 增量写入 `vda.img`。
+
+## 3. 运行实测与固证数据
+
+1. 系统状态：
+   - `sys.boot_completed = 1`
+   - `mFocusedApp=ActivityRecord{3c5590a u0 com.miui.home/.launcher.Launcher t2}`
+2. 内核渲染闭环：
+   - `cdh-mali: B2 bridge done seq=133 status=0 wrote=163200B`
+   - `gpumbox_bridge.log`: `bridge seq=133 req=80B resp=262172B shader=32B status=0 951.4ms`
+3. 截屏图片像素指标（devices/xiaomi/gold-15/build/doc/evidence/screen.png）：
+   - 分辨率：1080 x 2400 (RGBA)
+   - Alpha 通道极值：`min=255, max=255`
+   - 不透明像素比例：`2592000 / 2592000 (100.00%)`
+   - 彻底消除了全透明黑屏！
