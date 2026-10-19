@@ -96,7 +96,7 @@ PY_NAME = "apply_sepolicy.py"
 
 # 容器内脚本模板：外层用 @@TOKEN@@ 替换，内层再对 CIL 做 %(vers)s 格式化。
 _APPLY_PY = r'''#!/usr/bin/env python3
-import sys
+import os, sys
 
 DST = "@@DST@@"
 POLICY_FILE = DST + "@@POLICY@@"
@@ -123,6 +123,44 @@ CIL = """;; cdh gold-15: keymint-hal-v1: remote keymint hvc3 chardev + serialno
 ;; /data 只读（实测 avc denied { read } vold -> vd_device blk_file）。
 (allow vold vd_device (blk_file (ioctl read write getattr lock append map open watch watch_reads)))
 (allow fsck vd_device (blk_file (ioctl read write getattr lock append map open watch watch_reads)))
+;; cdh gold-15: surfaceflinger & zygote DRI/DRM access for Mesa/virgl
+(allow surfaceflinger_%(vers)s dri_device (chr_file (ioctl read write getattr lock append map open watch watch_reads)))
+(allow surfaceflinger_%(vers)s dri_device (dir (read open search getattr)))
+(allow surfaceflinger_%(vers)s vendor_default_prop_%(vers)s (file (read getattr map open)))
+(allow surfaceflinger_%(vers)s vendor_default_prop_%(vers)s (dir (search)))
+(allow surfaceflinger_%(vers)s sysfs_%(vers)s (file (read getattr map open)))
+(allow surfaceflinger_%(vers)s sysfs_%(vers)s (dir (read getattr map open search)))
+(allow surfaceflinger_%(vers)s sysfs_gpu_%(vers)s (file (read getattr map open)))
+(allow surfaceflinger_%(vers)s sysfs_gpu_%(vers)s (dir (read getattr map open search)))
+(allow surfaceflinger_%(vers)s default_android_service (service_manager (find add)))
+(allow surfaceflinger_%(vers)s same_process_hal_file (file (read getattr map open execute)))
+
+(allow zygote_%(vers)s dri_device (chr_file (ioctl read write getattr lock append map open watch watch_reads)))
+(allow zygote_%(vers)s dri_device (dir (read open search getattr)))
+(allow zygote_%(vers)s vendor_default_prop_%(vers)s (file (read getattr map open)))
+(allow zygote_%(vers)s vendor_default_prop_%(vers)s (dir (search)))
+(allow zygote_%(vers)s sysfs_%(vers)s (file (read getattr map open)))
+(allow zygote_%(vers)s sysfs_%(vers)s (dir (read getattr map open search)))
+(allow zygote_%(vers)s sysfs_gpu_%(vers)s (file (read getattr map open)))
+(allow zygote_%(vers)s sysfs_gpu_%(vers)s (dir (read getattr map open search)))
+(allow zygote_%(vers)s hwservicemanager_prop_%(vers)s (file (read getattr map open)))
+(allow zygote_%(vers)s hal_graphics_allocator_service (service_manager (find)))
+(allow zygote_%(vers)s default_prop_%(vers)s (file (read getattr map open)))
+(allow zygote_%(vers)s vendor_fp_prop (file (read getattr map open)))
+(allow zygote_%(vers)s vendor_misound_ro_prop (file (read getattr map open)))
+(allow zygote_%(vers)s same_process_hal_file (file (read getattr map open execute)))
+
+(allow hypsys_ssi_default default_android_service (service_manager (find add)))
+(allow mcd device_identifiers_service (service_manager (find)))
+(allow mcd cgroup_v2 (dir (read open search getattr)))
+
+(allow vendor_init_%(vers)s vendor_userdir_file (dir (read open search getattr write add_name create setattr)))
+(allow vendor_init_%(vers)s bootloader_prop_%(vers)s (property_service (set)))
+(allow vendor_init_%(vers)s default_prop_%(vers)s (property_service (set)))
+(allow vendor_init_%(vers)s deviceid_prop (property_service (set)))
+(allow vendor_init_%(vers)s exported_system_prop_%(vers)s (property_service (set)))
+(allow vendor_init_%(vers)s sno_prop (property_service (set)))
+(allow vendor_init_%(vers)s vendor_mtkcam_prop (property_service (set)))
 """
 
 PIONEER_CIL = """@@PIONEER_CIL@@"""
@@ -130,6 +168,11 @@ PIONEER_CIL = """@@PIONEER_CIL@@"""
 FC_BLOB = """
 # cdh gold-15: remote keymint /dev/hvc3
 /dev/hvc3  u:object_r:keymaster_device:s0
+# cdh gold-15: same_process_hal_file for Mesa/virgl dependencies
+/vendor/lib(64)?/libui\\.so						u:object_r:same_process_hal_file:s0
+/vendor/lib(64)?/android\\.hardware\\.graphics\\.allocator@[2-4]\\.0\\.so	u:object_r:same_process_hal_file:s0
+/vendor/lib(64)?/android\\.hardware\\.graphics\\.bufferqueue@[1-2]\\.0\\.so	u:object_r:same_process_hal_file:s0
+/vendor/lib(64)?/android\\.hardware\\.graphics\\.common-V[0-9]+-ndk\\.so	u:object_r:same_process_hal_file:s0
 """
 
 # ro.vendor.boot_security_patch 的 exact 规则：Remote KeyMint 起机要读它（见
@@ -167,7 +210,28 @@ append(POLICY_FILE, CIL % {"vers": vers}, MARKER)
 append(POLICY_FILE, PIONEER_CIL % {"vers": vers}, PIONEER_MARKER)
 append(VFC, FC_BLOB, VFC_MARKER)
 append(VPC, VPC_BLOB, VPC_MARKER)
-print("[ok] keymint/pioneer sepolicy 追加完成（plat vers %s）" % vers)
+
+# 显式为 Mesa/virgl 依赖库刷上 same_process_hal_file 标签
+SPHAL_FILES = [
+    "lib64/libui.so",
+    "lib/libui.so",
+    "lib64/android.hardware.graphics.allocator@2.0.so",
+    "lib64/android.hardware.graphics.allocator@3.0.so",
+    "lib64/android.hardware.graphics.allocator@4.0.so",
+    "lib64/android.hardware.graphics.bufferqueue@1.0.so",
+    "lib64/android.hardware.graphics.bufferqueue@2.0.so",
+    "lib64/android.hardware.graphics.common-V4-ndk.so",
+]
+for rel in SPHAL_FILES:
+    p = os.path.join(DST, rel)
+    if os.path.isfile(p):
+        try:
+            os.setxattr(p, "security.selinux", b"u:object_r:same_process_hal_file:s0")
+            print("[ok] relabeled %s -> same_process_hal_file" % rel)
+        except Exception as e:
+            print("[warn] failed to setxattr %s: %s" % (rel, e))
+
+print("[ok] keymint/pioneer/sphal sepolicy 追加完成（plat vers %s）" % vers)
 '''
 
 

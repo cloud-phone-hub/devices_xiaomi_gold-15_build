@@ -36,9 +36,3 @@
 #   servicemanager: Could not find ... in the VINTF manifest. No alternative instances declared.
 #   vold: AIDL IBootControl not available, falling back to HIDL.   → 立即回退，不再卡
 /etc/vintf/manifest/android.hardware.boot-service.mtk.xml
-
-# 为什么删这条：官方 MTK vendor 自带 libGLES_meow.so 单库驱动（需 /dev/mali0）。
-# EGL Loader.cpp:684 优先命中单库 libGLES_<suffix>.so 并跳过三件套；
-# 删掉单库让 Loader 退回 libEGL_/libGLESv1_CM_/libGLESv2_meow.so 三件套（interposer），
-# 经由 Mesa / virtio-gpu 实现真实硬件光栅化与出画。
-/lib64/egl/libGLES_meow.so

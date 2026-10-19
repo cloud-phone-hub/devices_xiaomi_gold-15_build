@@ -1,4 +1,0 @@
-daemon: 实例目录 /Volumes/work/cloud-phone-hub/out/core/daemon/runtime/gold-15/72 (序号 72)
-daemon: 实例 72 端口槽位 0（console=5910 adb=5911 fastboot=15600 蓝牙=25911）
-daemon: 已从 /Volumes/work/cloud-phone-hub/out/core/daemon/dist/darwin/firmware/efi-vars.fd 补全固件 -> /Volumes/work/cloud-phone-hub/out/core/daemon/runtime/gold-15/72/efi-vars.fd
-daemon: 通道控制面 http://127.0.0.1:49894

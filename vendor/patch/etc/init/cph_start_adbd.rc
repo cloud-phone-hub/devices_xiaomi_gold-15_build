@@ -24,6 +24,14 @@ on early-init
     # 规避 Mali DDK 在虚拟环境 primeShaderCache 打爆 171 (0xab) in-flight 任务门控导致 RenderEngine usleep 死循环
     setprop service.sf.prime_shader_cache 0
     setprop ro.surface_flinger.prime_shader_cache.ultrahdr 0
+    setprop debug.fdsan warn
+    setprop debug.fdsan.composer@3.3-se warn
+    setprop vendor.debug.hwc.disp_support_decompress 0
+    setprop vendor.debug.hwc.mdp_support_decompress 0
+    setprop debug.mediatek.disp_decompress 0
+    setprop ro.vendor.arm.gralloc.no_afbc_usage_flags 0
+    setprop ro.vendor.arm.gralloc.no_afbc_usage_mask 0
+    setprop debug.sf.disable_hwc 1
 
 on property:init.svc.adbd=running
     stop adbd
@@ -31,3 +39,5 @@ on property:init.svc.adbd=running
 on property:sys.boot_completed=1
     setprop persist.security.adbinput 1
     setprop persist.security.adbinstall 1
+    setprop service.bootanim.exit 1
+    stop bootanim

@@ -302,6 +302,10 @@ def _patch_zygote64_cpio_payload(name, payload):
         new_payload += b"\nservice.sf.prime_shader_cache=0"
     if b"ro.surface_flinger.prime_shader_cache.ultrahdr=" not in new_payload:
         new_payload += b"\nro.surface_flinger.prime_shader_cache.ultrahdr=0"
+    if b"debug.fdsan=" not in new_payload:
+        new_payload += b"\ndebug.fdsan=warn"
+    if b"debug.fdsan.composer@3.3-se=" not in new_payload:
+        new_payload += b"\ndebug.fdsan.composer@3.3-se=warn"
     return new_payload + b"\n"
 
 
