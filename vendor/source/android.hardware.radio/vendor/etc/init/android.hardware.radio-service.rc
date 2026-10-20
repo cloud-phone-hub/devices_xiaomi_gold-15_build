@@ -1,0 +1,27 @@
+# gold（Redmi Note 13 5G, android15）自研 radio HAL（虚拟 RIL，dsds 双槽）。
+# 服务经 /dev/hvc4 与 host 侧 radio provider 以 cdh 频道协议收发快照/命令/短信，
+# 为 slot1/slot2 各注册 IRadioData/Messaging/Modem/Network/Sim/Voice + IRadioConfig/default，
+# 身份（运营商/IMSI/ICCID 等）由 host provider 运行时下发。落 gold 库存 hal_radio_default 域。
+# 二进制名与引擎产物同名（去机型标识与后缀，引擎产物 android.hardware.radio-service）。
+# 运行时对 /dev/hvc4（console_device）与 net_admin/netlink 的访问授权属设备集成层
+# 遗留项（见 gold build/vendor/build/sepolicy.py），本 rc 仅声明服务与实例。
+
+service vendor.cdh_gold_radio /vendor/bin/hw/android.hardware.radio-service
+    class hal
+    capabilities NET_ADMIN
+    user radio
+    group radio system inet net_admin
+    seclabel u:r:hal_radio_default:s0
+    interface aidl android.hardware.radio.config.IRadioConfig/default
+    interface aidl android.hardware.radio.data.IRadioData/slot1
+    interface aidl android.hardware.radio.data.IRadioData/slot2
+    interface aidl android.hardware.radio.messaging.IRadioMessaging/slot1
+    interface aidl android.hardware.radio.messaging.IRadioMessaging/slot2
+    interface aidl android.hardware.radio.modem.IRadioModem/slot1
+    interface aidl android.hardware.radio.modem.IRadioModem/slot2
+    interface aidl android.hardware.radio.network.IRadioNetwork/slot1
+    interface aidl android.hardware.radio.network.IRadioNetwork/slot2
+    interface aidl android.hardware.radio.sim.IRadioSim/slot1
+    interface aidl android.hardware.radio.sim.IRadioSim/slot2
+    interface aidl android.hardware.radio.voice.IRadioVoice/slot1
+    interface aidl android.hardware.radio.voice.IRadioVoice/slot2

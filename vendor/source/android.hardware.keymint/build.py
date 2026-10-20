@@ -143,11 +143,15 @@ def _missing(what, path):
 
 
 def resolve_runtime_lib_dir(arg):
-    """--runtime-lib-dir 参数 > env CDH_RUNTIME > deps（官方 gold images）。"""
+    """--runtime-lib-dir 参数 > env CDH_RUNTIME > deps（官方 gold images）。
+
+    返回**目录列表**（vendor-/system-compile-dep 各一）；env 可用 os.pathsep 传多目录。
+    """
     if arg:
-        return arg
-    if os.environ.get("CDH_RUNTIME"):
-        return os.environ["CDH_RUNTIME"]
+        return [arg]
+    env = os.environ.get("CDH_RUNTIME")
+    if env:
+        return [p for p in env.split(os.pathsep) if p]
     return deps.prepare_runtime_libs()
 
 
@@ -176,28 +180,27 @@ def extract_base(path_in_img):
     return data
 
 
-def check_prereqs(runtime_lib_dir):
-    """编译前置校验：脚本、依赖源工作区、运行库。缺失即报错退出。"""
+def check_prereqs(runtime_lib_dirs):
+    """编译前置校验：脚本、依赖源工作区、运行库（多目录逐库搜索）。缺失即报错退出。"""
     if not os.path.isfile(COMPILE_SCRIPT):
         _missing("keymint 编译脚本", COMPILE_SCRIPT)
     for sub in REQUIRED_SOURCE_DIRS:
         if not os.path.isdir(os.path.join(SOURCE_WORKSPACE, sub)):
             _missing("依赖源目录", os.path.join(SOURCE_WORKSPACE, sub))
-    if not os.path.isdir(runtime_lib_dir):
-        _missing("运行库目录", runtime_lib_dir)
+    for d in runtime_lib_dirs:
+        if not os.path.isdir(d):
+            _missing("运行库目录", d)
     for lib in RUNTIME_LIBS:
-        if not os.path.isfile(os.path.join(runtime_lib_dir, lib)):
-            _missing("运行库", os.path.join(runtime_lib_dir, lib))
+        if not any(os.path.isfile(os.path.join(d, lib)) for d in runtime_lib_dirs):
+            _missing("运行库", f"{lib}（搜索: {', '.join(runtime_lib_dirs)}）")
 
 
-def compile_remote(dry_run=False, runtime_lib_dir=None):
+def compile_remote(dry_run=False, runtime_lib_dirs=None):
     """委托 build-guest-keymint.sh 编译远程 keymint，产物落成基座同名。"""
-    argv = [
-        "bash", COMPILE_SCRIPT,
-        "--out", DEST_BIN,
-        "--runtime-lib-dir", runtime_lib_dir,
-        "--standalone-dir", STANDALONE_DIR,
-    ]
+    argv = ["bash", COMPILE_SCRIPT, "--out", DEST_BIN]
+    for d in runtime_lib_dirs:
+        argv += ["--runtime-lib-dir", d]
+    argv += ["--standalone-dir", STANDALONE_DIR]
     argv += [arg for src in COMPAT_SOURCES for arg in ("--extra-source", src)]
     if dry_run:
         print("[..] (dry)", " ".join(argv))
@@ -343,11 +346,11 @@ def register_labels(baselines_path, dry_run=False):
 
 
 def build(dry_run=False, runtime_lib_dir=None):
-    runtime_lib_dir = resolve_runtime_lib_dir(runtime_lib_dir)
-    check_prereqs(runtime_lib_dir)
+    runtime_lib_dirs = resolve_runtime_lib_dir(runtime_lib_dir)
+    check_prereqs(runtime_lib_dirs)
     print(f"==> 编译远程 keymint（{COMPILE_SCRIPT}）"
-          + (f" runtime-lib-dir={runtime_lib_dir}" if dry_run else ""))
-    compile_remote(dry_run=dry_run, runtime_lib_dir=runtime_lib_dir)
+          + (f" runtime-lib-dirs={runtime_lib_dirs}" if dry_run else ""))
+    compile_remote(dry_run=dry_run, runtime_lib_dirs=runtime_lib_dirs)
 
     print("==> rc / tee-supplicant / vintf（基座改写）")
     write_rc_vintf(dry_run=dry_run)

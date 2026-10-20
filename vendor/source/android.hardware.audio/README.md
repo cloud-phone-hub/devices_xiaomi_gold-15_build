@@ -2,9 +2,11 @@
 
 > **设备集成层，不重复驱动源码、不自行编译链接**：驱动 C++（含两个 main）与整套 codegen +
 > 编译 + 链接流水线都住在 `hal/android15/android.hardware.audio`；本模块的 `build.py` 是一个
-> **薄集成层**——加载该线 `build.py:build(out_dir, runtime_lib_dir, dry_run)` 产出两个服务二进制，
+> **薄集成层**——加载该线 `build.py:build(out_dir, runtime_lib_dirs, dry_run)` 产出两个服务二进制，
 > 再拷进 `/vendor` staging、落 gold 独有配置（本目录 `vendor/`）并登记 SELinux。运行库 ABI 由
-> gold-15 lineage-22.0 super 研磨（或 env `CDH_RUNTIME` 借用），经 `runtime_lib_dir` 传入引擎。
+> gold-15 官方镜像按分区分目录研磨（宿主 `dump.erofs`，免 docker；vendor→`out/runtime_lib_dir/vendor-compile-deps/lib64`、
+> system→`out/runtime_lib_dir/system-compile-deps/lib64`，
+> 或 env `CDH_RUNTIME` 借用），经 `runtime_lib_dirs`（目录列表）传入引擎。
 > 本目录**只放设备独有配置 `vendor/`**，不再自带 `src/`、`aidl/`、`deps.py`，也不复制编译流水线。
 
 ## 0. 模块定位
@@ -48,11 +50,14 @@ note13 一致）：
    `AudioPolicyManagerCustomImpl::gainTable_getVolumeDbFromComputeVolume` 在 HAL 提供
    productStrategies 时会 `map::at key not found` 崩溃 audioserver；留空则引擎用内置全集。
 
-**本模块采用 `hal/android15` 的泛化 `ConfigImpl`**：`getEngineConfig()` 返回最小默认
-引擎配置（`volumeGroups` / `productStrategies` 均为空），音量交由 `/vendor/etc` 的小米
-引擎音量配置链驱动（见下）。这与 note13-5G-15 的做法不同——后者在 `ConfigImpl` 里硬编码
-13 个卷组（名字精确匹配流类型，曲线取自 `audio_policy_engine_default_stream_volumes.xml`）。
-若 gold-15 上出现音量组 Min/Max=0 / 音量键无效，可参考 note13 版 `ConfigImpl` 回填机型卷组。
+**`getEngineConfig()` 的卷组现由配置文件外置**：hal 线的 `ConfigImpl` 启动时读
+`/vendor/etc/cfg/cdh_audio_engine.cfg`（零依赖行式格式，见 §5），读到就据此构建 `volumeGroups`；
+读不到则返回**空**（回退到“音量交由 `/vendor/etc` 小米引擎音量配置链驱动”的老行为）。
+gold-15 随镜像带一份 `cdh_audio_engine.cfg`（本目录 vendor/etc/cfg/），内容**逐值镜像 note13**
+硬编码在 `ConfigImpl.cpp` 里的 13 个卷组（名字精确匹配流类型、曲线取自
+`audio_policy_engine_default_stream_volumes.xml`）。这样 **gold 改音量组/曲线只编辑这份 .cfg，
+不必 fork hal 的 `ConfigImpl.cpp`**——正是把 note13 “代码里的配置”搬成 gold “配置文件”。
+（note13-5G-15 仍用其设备树自己的 `ConfigImpl.cpp`，不受影响。）
 
 配套把小米引擎音量配置链镜像到 `/vendor/etc`（MTK 默认引擎硬编码读取）：
 `audio_policy_engine_configuration.xml`（含 `xi:include`）+ `product_strategies` /
@@ -87,7 +92,7 @@ guest PCM -> ALSA `/dev/snd/pcmC0D0p` -> QEMU intel-hda -> mixeng -> coreaudio -
 ## 5. 依赖来源
 
 本模块**不复制编译流水线**：`build.py` 加载并调用 `hal/android15/android.hardware.audio/build.py`
-的 `build(out_dir, runtime_lib_dir, dry_run)`，codegen + 编译 + 链接全在引擎里。本目录无
+的 `build(out_dir, runtime_lib_dirs, dry_run)`，codegen + 编译 + 链接全在引擎里。本目录无
 `src/`、`aidl/`、`deps.py`。分工：
 
 - **构建引擎**：`hal/android15/android.hardware.audio/build.py`（本模块 `_load_by_path` 后调用）。
@@ -98,10 +103,13 @@ guest PCM -> ALSA `/dev/snd/pcmC0D0p` -> QEMU intel-hda -> mixeng -> coreaudio -
   - 编译期公共组件 `hal/android15/common/`（binder 平台头 / log shim / `__config_site` /
     bionic15 源码态 crt），env `CDH_HAL_COMMON` 可覆盖；工具链经 `hal/android15/build/toolchina.py`。
 - **本模块只负责**：把引擎产出的二进制拷进 `/vendor` staging、落 gold 独有配置 `vendor/`
-  （rc/vintf/policy/engine XML）、登记 SELinux baselines。
+  （rc/vintf/policy/engine XML + 外置卷组 `cdh_audio_engine.cfg`）、登记 SELinux baselines。
 - **链接期 ABI 运行库**：`libc++.so / libbinder_ndk.so`（带 `.abi.so`）由 gold-15 自己
-  lineage-22.0 super 研磨（`build/vendor/build/deps.py:prepare_runtime_libs`），经参数
-  `runtime_lib_dir` 传入引擎；env `CDH_RUNTIME` 可指向已研磨目录。
+  官方镜像按分区**分目录**研磨（`build/vendor/build/deps.py:prepare_runtime_libs`，优先宿主
+  `dump.erofs`、无则容器兜底：vendor 侧入 `out/runtime_lib_dir/vendor-compile-deps/lib64`、
+  system 侧入 `out/runtime_lib_dir/system-compile-deps/lib64`），该函数
+  **返回两个目录的列表**经参数 `runtime_lib_dirs` 传入引擎（引擎逐库跨目录搜索）；
+  env `CDH_RUNTIME` 可指向已研磨目录（多目录用 `os.pathsep` 分隔，单目录也兼容）。
 
 ## 6. 构建期依赖一览
 
@@ -111,7 +119,7 @@ guest PCM -> ALSA `/dev/snd/pcmC0D0p` -> QEMU intel-hda -> mixeng -> coreaudio -
 | AIDL 快照 | `hal/android15/out/aosp/aidl/audio`（hal 线 deps.py 下载） | `hal_deps.aidl_ready("audio")` |
 | AOSP platform 头 | `hal/android15/out/aosp/platform`（hal 线 deps.py 下载） | `hal_deps.platform_ready()` |
 | 编译期公共组件 | `hal/android15/common/`（含 bionic15 源码态 crt） | 目录存在 |
-| ABI 运行库 | gold-15 lineage-22.0 super（共享 deps 研磨）或 `CDH_RUNTIME` | `libc++.so`/`libbinder_ndk.so` |
+| ABI 运行库 | gold-15 官方镜像按分区分目录研磨（共享 deps）或 `CDH_RUNTIME` | `libc++.so`/`libbinder_ndk.so` |
 
 版本化包（`AIDL_PACKAGES`，hal 布局 `out/aosp/aidl/audio/<pkg>/<version>` + `.hash`）：
 `android.hardware.common`(v2)、`android.hardware.common.fmq`(v1)、
@@ -123,17 +131,18 @@ guest PCM -> ALSA `/dev/snd/pcmC0D0p` -> QEMU intel-hda -> mixeng -> coreaudio -
 
 本模块 `build.py` 是**薄集成层**，流程：
 
-1. **定位运行库**：`prepare_abi()` 取 `runtime_lib_dir`（`CDH_RUNTIME` 优先，否则研磨
-   gold-15 super）。
-2. **委托引擎**：调用 `hal_audio.build(out_dir, runtime_lib_dir, dry_run)`，把整套
+1. **定位运行库**：`prepare_abi()` 取 `runtime_lib_dirs`（目录列表；`CDH_RUNTIME` 优先，
+   否则研磨 gold-15 官方镜像到 out/runtime_lib_dir 下 vendor-/system-compile-deps 两个 lib64 目录）。
+2. **委托引擎**：调用 `hal_audio.build(out_dir, runtime_lib_dirs, dry_run)`，把整套
    codegen + 编译 + 链接交给 `hal/android15/android.hardware.audio/build.py`（引擎内含依赖
    校验 `check_deps`、NDK codegen、源码编译、源码态 crt 链接）。`out_dir` 传 `out/vendor`：
    引擎产物落 `out/vendor/bin/hw`，临时工作区落 `out/vendor/tmp/audio-ndk-work`（**不进**
    `out/dist/vendor` 打包面）。
 3. **安装二进制**：`install_binaries()` 把两个服务从 `out/vendor/bin/hw` 拷进
    `out/dist/vendor/bin/hw`（`0755`）。
-4. **落 gold 配置**：`write_rc / write_vintf / write_policy / write_engine_configs` 把本目录
-   `vendor/` 下的 rc / vintf manifest / primary policy / 引擎音量 XML 链拷进 staging `/vendor/etc`。
+4. **落 gold 配置**：`write_rc / write_vintf / write_policy / write_module_engine_cfg /
+   write_engine_configs` 把本目录 `vendor/` 下的 rc / vintf manifest / primary policy /
+   外置卷组 `cdh_audio_engine.cfg` / 引擎音量 XML 链拷进 staging `/vendor/etc`（cfg 落 `/vendor/etc/cfg/`）。
 5. **登记 SELinux**：`register_labels()` 把标签写进 baselines 清单（见 §9）。
 
 工具链、AIDL 快照布局、`FmqSupport.cpp`（自实现 ashmem/native_handle/EventFlag）、
@@ -149,6 +158,7 @@ bin/hw/android.hardware.audio.effect.service-aidl.example   (0755, hal_audio_def
 etc/init/android.hardware.audio.service-aidl.example.rc     (0644, vendor_configs_file)
 etc/vintf/manifest/android.hardware.audio.service-aidl.xml  (0644, vendor_configs_file)
 etc/primary_audio_policy_configuration.xml                  (0644, vendor_configs_file)
+etc/cfg/cdh_audio_engine.cfg                                (0644, vendor_configs_file，getEngineConfig 外置卷组)
 etc/audio_policy_engine_configuration.xml                   (0644, vendor_configs_file)
 etc/audio_policy_engine_product_strategies.xml              (同上)
 etc/audio_policy_engine_stream_volumes.xml                  (同上)
@@ -160,7 +170,9 @@ etc/audio_policy_engine_default_stream_volumes.xml          (同上)
 `register_labels()` 把标签登记进 baselines 清单（`vendor.selinux-labels`）：
 
 - 两个 bin -> `u:object_r:hal_audio_default_exec:s0`
-- rc / vintf / policy / 引擎配置 xml -> `u:object_r:vendor_configs_file:s0`
+- rc / vintf / policy / 外置卷组 cfg / 引擎配置 xml -> `u:object_r:vendor_configs_file:s0`
+- 运行期需保证 HAL 域（`hal_audio_default`）能读 `vendor_configs_file`（现网通常已
+  allow；若严格 enforcing 下 `getEngineConfig` 读到空、回退默认，先核对该 file 类权限）。
 
 ## 10. 已知限制
 
@@ -174,6 +186,6 @@ etc/audio_policy_engine_default_stream_volumes.xml          (同上)
   daemon/QEMU，不在本模块；若 host 无声先核对这两处与 host 系统输出设备选择。
 - **ABI 运行库研磨需 docker + gold-15 lineage-22.0 super 解包**：本机无 docker 时，可用
   env `CDH_RUNTIME` 指向已研磨的运行库目录（含 `libc++.so / libbinder_ndk.so`）跳过研磨。
-- **ConfigImpl 泛化**（见 §2）：卷组为空，音量依赖 `/vendor/etc` 引擎 XML 链；如需机型
-  精确卷组，应在 `hal/android15/android.hardware.audio/src/ConfigImpl.cpp` 回填（或参考
-  note13-5G-15 版）。
+- **ConfigImpl 外置卷组**（见 §2）：`getEngineConfig` 启动读 `/vendor/etc/cfg/cdh_audio_engine.cfg`
+  构 13 个卷组（逐值同 note13）；该文件缺失则回退空 volumeGroups，音量改依赖
+  `/vendor/etc` 引擎 XML 链。改音量只编辑这份 .cfg，无需重编驱动。

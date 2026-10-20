@@ -1,0 +1,14 @@
+# gold（Redmi Note 13 5G, android15）自研 Codec2 假登记 store（Dolby 实例）。
+# 服务名/二进制名/user/group/ioprio/task_profiles 与真机 /vendor/etc/init/
+# vendor.dolby.media.c2-default-service-dax.rc 逐字段一致；二进制内部按 /vendor/etc/cfg/
+# cdh_media.cfg 的「二进制名→实例」映射注册 IComponentStore/default9（Dolby AC4/EAC3
+# 假登记，createComponent CANNOT_DO）。落 gold 库存 hal_codec2_default 域。
+# 真机该 rc 无 interface aidl 行。
+
+service vendor-dolby-media-c2-hal /vendor/bin/hw/vendor.dolby.media.c2-default-service-dax
+    class hal
+    user mediacodec
+    group camera mediadrm drmrpc
+    ioprio rt 4
+    task_profiles ProcessCapacityHigh
+    seclabel u:r:hal_codec2_default:s0

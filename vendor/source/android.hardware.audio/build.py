@@ -69,7 +69,7 @@ hal_audio = _load_by_path("cdh_hal_audio_engine", _HAL_ENGINE)
 ENGINE_OUT_DIR = os.path.join(OUT_DIR, "vendor")
 
 # ---- gold 独有配置 / SELinux（引擎不关心，设备层职责）----
-RC_NAME = "android.hardware.audio.service-aidl.example.rc"
+RC_NAME = "android.hardware.audio.service-aidl.rc"
 VINTF_NAMES = ["android.hardware.audio.service-aidl.xml"]
 LABEL_BIN = "u:object_r:hal_audio_default_exec:s0"
 LABEL_CONFIG = "u:object_r:vendor_configs_file:s0"
@@ -80,18 +80,20 @@ ENGINE_CONFIG_XMLS = (
     "audio_policy_engine_stream_volumes.xml",
     "audio_policy_engine_default_stream_volumes.xml",
 )
-# 自研 HAL 的 IConfig.getEngineConfig 外置卷组配置（驱动启动读 /vendor/etc/<name>）。
+# 自研 HAL 的 IConfig.getEngineConfig 外置卷组配置（驱动启动读 /vendor/etc/cfg/<name>）。
 # 有了它，gold 改音量组/曲线只改这份文件，不必 fork hal 的 ConfigImpl.cpp。
 MODULE_ENGINE_CFG_NAME = "cdh_audio_engine.cfg"
 
 
 def prepare_abi(dry_run=False):
-    """运行库：CDH_RUNTIME 显式指定，否则研磨 gold 超级镜像。"""
+    """运行库**目录列表**：CDH_RUNTIME 显式指定（可用 os.pathsep 传多目录，
+    单目录也兼容），否则研磨 gold 超级镜像（vendor-/system-compile-dep 两个 lib64）。"""
     env = os.environ.get("CDH_RUNTIME")
     if env:
-        return env
-    if dry_run and not os.path.isdir(device_deps.COMPILE_DEP_DIR):
-        return "<dist>/vendor-compile-dep"
+        return [p for p in env.split(os.pathsep) if p]
+    if dry_run and not os.path.isdir(device_deps.VENDOR_COMPILE_DEP_DIR):
+        return [os.path.join("<dist>", "vendor-compile-dep", "lib64"),
+                os.path.join("<dist>", "system-compile-dep", "lib64")]
     return device_deps.prepare_runtime_libs(dry_run)
 
 
@@ -170,7 +172,7 @@ def write_module_engine_cfg(dst):
     缺该文件则驱动回退空 volumeGroups（hal 通用默认），此时音量依赖上面的
     audio_policy_engine_*.xml 链；本 gold 集成层默认随镜像带一份。
     """
-    src = os.path.join(MODULE_DIR, "vendor", "etc", MODULE_ENGINE_CFG_NAME)
+    src = os.path.join(MODULE_DIR, "vendor", "etc", "cfg", MODULE_ENGINE_CFG_NAME)
     if not os.path.isfile(src):
         print(f"[warn] 缺外置卷组配置 {MODULE_ENGINE_CFG_NAME}，跳过（驱动回退空引擎配置）",
               file=sys.stderr)
@@ -196,7 +198,7 @@ def register_labels(baselines_path, dry_run=False):
     for v in VINTF_NAMES:
         entries[f"etc/vintf/manifest/{v}"] = LABEL_CONFIG
     entries["etc/primary_audio_policy_configuration.xml"] = LABEL_CONFIG
-    entries[f"etc/{MODULE_ENGINE_CFG_NAME}"] = LABEL_CONFIG
+    entries[f"etc/cfg/{MODULE_ENGINE_CFG_NAME}"] = LABEL_CONFIG
     for name in ENGINE_CONFIG_XMLS:
         entries[f"etc/{name}"] = LABEL_CONFIG
     missing = {k: v for k, v in entries.items() if labels.get(k) != v}
@@ -239,7 +241,7 @@ def build(dry_run=False):
         write_vintf(os.path.join(VENDOR_STAGE_DIR, "etc", "vintf", "manifest", v))
     write_policy(os.path.join(VENDOR_STAGE_DIR, "etc",
                               "primary_audio_policy_configuration.xml"))
-    write_module_engine_cfg(os.path.join(VENDOR_STAGE_DIR, "etc",
+    write_module_engine_cfg(os.path.join(VENDOR_STAGE_DIR, "etc", "cfg",
                                          MODULE_ENGINE_CFG_NAME))
     write_engine_configs(os.path.join(VENDOR_STAGE_DIR, "etc"))
 

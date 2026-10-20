@@ -1,0 +1,13 @@
+<!--
+    gold 自研 vibrator HAL：底座未提供 AIDL IVibrator/IVibratorManager，故由本服务声明
+    IVibrator/default 与 IVibratorManager/default（v2），VibratorManagerService 据此枚举
+    振动器与能力（清单见 /vendor/etc/cfg/cdh_vibrator.cfg）。
+-->
+<manifest version="1.0" type="device">
+  <hal format="aidl">
+    <name>android.hardware.vibrator</name>
+    <version>2</version>
+    <fqname>IVibrator/default</fqname>
+    <fqname>IVibratorManager/default</fqname>
+  </hal>
+</manifest>

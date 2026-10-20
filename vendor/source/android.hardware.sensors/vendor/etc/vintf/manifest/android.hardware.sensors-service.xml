@@ -1,0 +1,11 @@
+<!--
+    gold 自研 sensors HAL：底座未提供 AIDL ISensors，故由本服务声明 ISensors/default（v2），
+    SensorService 据此枚举机型传感器清单（见 /vendor/etc/cfg/cdh_sensors.cfg）并接收 FMQ 事件流。
+-->
+<manifest version="1.0" type="device">
+  <hal format="aidl">
+    <name>android.hardware.sensors</name>
+    <version>2</version>
+    <fqname>ISensors/default</fqname>
+  </hal>
+</manifest>

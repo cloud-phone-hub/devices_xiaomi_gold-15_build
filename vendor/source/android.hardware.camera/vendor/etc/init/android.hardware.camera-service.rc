@@ -1,0 +1,10 @@
+# gold（Redmi Note 13 5G, android15）Android15 AIDL Camera HAL provider service（虚拟 provider）。
+# 仅登记 internal/0 provider；device 虚拟 camera 设备由 provider 进程动态按需注册。
+# 摄像头清单/vendor tag 表随源码编译进二进制（富结构设备值，与 radio 同类的「无 cfg」例外）。
+# 二进制名与引擎产物同名（去机型标识与后缀，引擎产物 android.hardware.camera-service）。
+service vendor.cdh_gold_camera /vendor/bin/hw/android.hardware.camera-service
+    class hal
+    user system
+    group system camera
+    seclabel u:r:hal_camera_default:s0
+    interface aidl android.hardware.camera.provider.ICameraProvider/internal/0

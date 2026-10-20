@@ -1,0 +1,12 @@
+<!--
+    gold 自研 thermal HAL：底座未提供 AIDL IThermal，故由本服务声明 IThermal/default（v2），
+    ThermalManagerService 据此获得温度/阈值与 thermal headroom 依据
+    （清单见 /vendor/etc/cfg/cdh_thermal.cfg）。
+-->
+<manifest version="1.0" type="device">
+  <hal format="aidl">
+    <name>android.hardware.thermal</name>
+    <version>2</version>
+    <fqname>IThermal/default</fqname>
+  </hal>
+</manifest>

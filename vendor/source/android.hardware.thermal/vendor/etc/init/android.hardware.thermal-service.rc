@@ -1,0 +1,15 @@
+# gold 自研 thermal HAL（虚拟 HAL）：接管 android.hardware.thermal.IThermal/default。
+# 底座无 thermal HAL（无服务、VINTF 也未声明）时，ThermalManagerService 报
+# "HAL Ready: false"、headroom 全 0。本服务上报温度传感器/阈值/冷却设备
+# （清单见 /vendor/etc/cfg/cdh_thermal.cfg），并按 /proc/stat CPU 负载驱动 SKIN 温度模型。
+# 底座可能已带 thermal 定义，故 disabled + 晚启动，避免同名服务冲突。
+service vendor.thermal-default /vendor/bin/hw/android.hardware.thermal-service
+    class hal
+    user system
+    group system
+    seclabel u:r:hal_thermal_default:s0
+    interface aidl android.hardware.thermal.IThermal/default
+    disabled
+
+on post-fs-data
+    start vendor.thermal-default

@@ -1,0 +1,16 @@
+# gold（Redmi Note 13 5G, android15）自研 Codec2 假登记 store（MTK 实例）。
+# 服务名/二进制名/user/group/ioprio/task_profiles 与真机 /vendor/etc/init/
+# android.hardware.media.c2-mediatek.rc 逐字段一致；二进制内部按 /vendor/etc/cfg/
+# cdh_media.cfg 的「二进制名→实例」映射注册 IComponentStore/default1（假登记：
+# listComponents 回静态组件表，createComponent 一律 CANNOT_DO，真实编解码由 v4l2
+# 硬件 store 承担）。落 gold 库存 vendor_sepolicy 自带的 hal_codec2_default 域。
+# 真机 rc 带 interface aidl 行，声明本实例供 VINTF/servicemanager 侧对齐。
+
+service android-hardware-media-c2-hal /vendor/bin/hw/android.hardware.media.c2-mediatek
+    class hal
+    user mediacodec
+    group camera drmrpc mediadrm media_rw sdcard_rw media system audio inet net_bt net_bt_admin net_bw_acct sdcard_r
+    ioprio rt 4
+    task_profiles ProcessCapacityHigh HighPerformance
+    seclabel u:r:hal_codec2_default:s0
+    interface aidl android.hardware.media.c2.IComponentStore/default1

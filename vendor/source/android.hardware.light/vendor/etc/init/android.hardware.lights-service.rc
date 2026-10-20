@@ -1,0 +1,15 @@
+# gold 自研 lights HAL（虚拟 HAL）：接管 android.hardware.light.ILights/default，
+# 按机型灯清单 /vendor/etc/cfg/cdh_light.cfg 上报；setLightState 只记录状态，
+# 不驱动宿主屏幕亮度，也不写 guest sysfs LED。
+# 底座可能已带 lights 定义，故 disabled + 晚启动，避免同名服务冲突。
+service vendor.light-default /vendor/bin/hw/android.hardware.lights-service
+    class hal
+    user system
+    group system
+    seclabel u:r:hal_light_default:s0
+    interface aidl android.hardware.light.ILights/default
+    shutdown critical
+    disabled
+
+on post-fs-data
+    start vendor.light-default

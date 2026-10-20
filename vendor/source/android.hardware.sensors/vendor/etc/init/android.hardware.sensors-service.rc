@@ -1,0 +1,16 @@
+# gold 自研 sensors HAL（虚拟 HAL）：接管 android.hardware.sensors.ISensors/default。
+# 底座无 sensors HAL（无服务、VINTF 也无声明）时，SensorService 起不来
+# （dumpsys sensorservice = "No Sensors on the device"）。本服务上报机型传感器清单
+# （清单见 /vendor/etc/cfg/cdh_sensors.cfg）并通过 FMQ 生成虚拟事件流。
+# 底座可能已带 sensors 定义，故 disabled + 晚启动，避免同名服务冲突。
+service vendor.sensors-default /vendor/bin/hw/android.hardware.sensors-service
+    class hal
+    user system
+    group system
+    rlimit rtprio 10 10
+    seclabel u:r:hal_sensors_default:s0
+    interface aidl android.hardware.sensors.ISensors/default
+    disabled
+
+on post-fs-data
+    start vendor.sensors-default

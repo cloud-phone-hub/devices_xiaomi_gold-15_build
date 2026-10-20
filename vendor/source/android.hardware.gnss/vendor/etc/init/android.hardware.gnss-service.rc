@@ -1,0 +1,19 @@
+# gold（Redmi Note 13 5G, android15）自研 gnss HAL（虚拟 HAL）。
+#
+# 底座未提供 AIDL GNSS HAL（无服务、VINTF 无 IGnss 声明）时，GnssLocationProvider
+# 不创建（LocationManager 里没有 gps provider）。本服务接管 android.hardware.gnss.IGnss/default
+# 及其全部扩展子接口，按机型 systemInfo/能力位与默认 fix（见 /vendor/etc/cfg/cdh_gnss.cfg）
+# 上报；位置来源有三处：cfg 默认值、framework 的 injectLocation/injectBestLocation、
+# 控制文件 /data/vendor/gps/fix（本 rc 负责建目录，写入即强制下发一次 fix）。
+# 底座可能已带 gnss 定义，故 disabled + 晚启动，避免同名服务冲突。
+service vendor.cdh_gnss /vendor/bin/hw/android.hardware.gnss-service
+    class hal
+    user system
+    group system gps
+    seclabel u:r:hal_gnss_default:s0
+    interface aidl android.hardware.gnss.IGnss/default
+    disabled
+
+on post-fs-data
+    mkdir /data/vendor/gps 0770 system shell
+    start vendor.cdh_gnss
