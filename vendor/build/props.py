@@ -18,13 +18,18 @@ from debugfs import cat, path_exists  # noqa: E402
 def _build_prop_edits():
     """读取 baselines vendor.build-prop-sets / build-prop-unsets。
 
-    sets：["key", "value"] 覆盖或追加；unsets："key" 删除所有匹配行。
+    sets：{key: value} 对象覆盖或追加（兼容旧数组 [[key, value], ...]）；
+    unsets：{key: ""} 对象的键（兼容旧数组）删除所有匹配行。
     """
     with open(baselines_file(), encoding="utf-8") as f:
         doc = json.load(f)
     v = doc.get("vendor", {})
-    sets = [tuple(e) for e in v.get("build-prop-sets", []) if len(e) >= 2]
-    unsets = list(v.get("build-prop-unsets", []))
+    raw = v.get("build-prop-sets", {})
+    if isinstance(raw, dict):
+        sets = list(raw.items())
+    else:  # 旧数组格式
+        sets = [tuple(e) for e in raw if len(e) >= 2]
+    unsets = list(v.get("build-prop-unsets", {}))
     return sets, unsets
 
 

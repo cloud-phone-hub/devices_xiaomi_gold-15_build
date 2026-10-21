@@ -34,6 +34,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 BUILD_DIR = os.path.dirname(os.path.abspath(__file__))
 SCRIPTS_DIR = os.path.join(BUILD_DIR, "scripts")
+# 设备根（build/ 上一级）与项目根（设备根再上三级），用于拼 roms/ 与 lineage-rom/
+DEVICE_ROOT = os.path.dirname(BUILD_DIR)
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(DEVICE_ROOT)))
 
 _manifest_path = os.path.join(BUILD_DIR, "manifest.json")
 
@@ -48,6 +51,31 @@ def _load_manifest():
             return json.load(f)
     except (OSError, ValueError):
         return None
+
+
+def _export_build_env(build):
+    """把选中的 build 条目导出为 CDH_* 环境变量，供下游阶段脚本（buildenv）读取。
+
+    仅 manifest 字段存在的项才导出（缺失项由 buildenv 自行推导/报错）。
+    """
+    if not build:
+        return
+    paths = {
+        "CDH_BUILD_ID": build.get("build-id") or "",
+        "CDH_OS_VERSION": build.get("version") or "",
+        "CDH_ROM_TGZ": (os.path.join(DEVICE_ROOT, "roms", build["factory-zip"])
+                        if build.get("factory-zip") else ""),
+        "CDH_ROM_DIR": (os.path.join(DEVICE_ROOT, "roms", build["factory-dir"])
+                        if build.get("factory-dir") else ""),
+        "CDH_LINEAGE_ZIP": (os.path.join(PROJECT_ROOT, "lineage-rom", build["lineage-zip"])
+                            if build.get("lineage-zip") else ""),
+        "CDH_LINEAGE_DIR": (os.path.join(PROJECT_ROOT, "lineage-rom", build["lineage-dir"])
+                            if build.get("lineage-dir") else ""),
+    }
+    for key, value in paths.items():
+        if value:
+            os.environ[key] = value
+            print(f"  {key}={value}")
 
 
 def _print_device_info(manifest):
@@ -141,6 +169,9 @@ def main():
             print(f"[err] 未知 build-id: {args.build_id}（可选: {', '.join(ids)}）")
             sys.exit(2)
         print(f"==> 选择固件 build-id: {args.build_id}")
+        selected = next((b for b in (manifest or {}).get("build", [])
+                         if b.get("build-id") == args.build_id), None)
+        _export_build_env(selected)
 
     _print_device_info(manifest)
 

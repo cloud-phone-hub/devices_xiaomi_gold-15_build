@@ -339,16 +339,18 @@ def register_baselines(labels, properties, dry_run=False):
     else:
         print("[..] baselines 标签已齐，跳过")
 
-    sets = doc.setdefault("vendor", {}).setdefault("build-prop-sets", [])
-    index = {p[0]: p for p in sets if isinstance(p, list) and len(p) == 2}
+    sets = doc.setdefault("vendor", {}).setdefault("build-prop-sets", {})
+    if isinstance(sets, list):  # 兼容旧数组格式（[[key, value], ...]）
+        sets = {p[0]: p[1] for p in sets if isinstance(p, list) and len(p) == 2}
+        doc["vendor"]["build-prop-sets"] = sets
     for key, value in properties.items():
-        pair = index.get(key)
-        if pair is None:
-            sets.append([key, value])
+        if key not in sets:
+            sets[key] = value
             changed = True
             print(f"[{'..' if dry_run else 'ok'}] baselines 追加 {key}={value}")
-        elif pair[1] != value:
-            old, pair[1] = pair[1], value
+        elif sets[key] != value:
+            old = sets[key]
+            sets[key] = value
             changed = True
             print(f"[{'..' if dry_run else 'ok'}] baselines 改 {key}: "
                   f"{old!r} -> {value!r}")
