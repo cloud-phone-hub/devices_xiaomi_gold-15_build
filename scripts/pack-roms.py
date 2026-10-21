@@ -19,6 +19,7 @@
 """
 
 import argparse
+import json
 import os
 import re
 import shutil
@@ -29,8 +30,9 @@ import zipfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from buildenv import (  # noqa: E402
-    BOOT_DIST, LINEAGE_VDA_MEMBER, LINEAGE_ZIP, PATCH_DIST, SUPER_DIST, TMP_DIR,
-    VENDOR_BOOT_DIST, VERSION_DATA, VERSION_DIR, VERSION_VDA,
+    BOOT_DIST, BUILD_ENTRY, LINEAGE_VDA_MEMBER, LINEAGE_ZIP, PATCH_DIST,
+    SUPER_DIST, TMP_DIR, VENDOR_BOOT_DIST, VERSION_DATA, VERSION_DIR, VERSION_VDA,
+    manifest_runtime,
 )
 from buildenv import _qemu_img  # noqa: E402
 import lpmemeta  # noqa: E402
@@ -47,6 +49,8 @@ GPT_SIGNATURE = b"EFI PART"
 DATA_VIRT_BYTES = 118398996480
 WORK_DIR = os.path.join(TMP_DIR, "pack")
 VDA_RAW_CACHE = os.path.join(WORK_DIR, "vda.raw")
+# 设备运行参数（manifest.runtime + 拼接 id），随盘集落在 VERSION_DIR 供 daemon 读取
+DEVICE_JSON = os.path.join(VERSION_DIR, "device.json")
 
 
 def _detect_sector(f):
@@ -383,8 +387,45 @@ def _make_data_qcow2(force, dry_run):
     print(f"[ok] data.qcow2: {os.path.getsize(VERSION_DATA)} B")
 
 
+def _compose_device_id(runtime, build):
+    """id = brand_region_version（runtime.brand + 选中 build 的 region/version）。"""
+    parts = (
+        runtime.get("brand"),
+        (build or {}).get("region"),
+        (build or {}).get("version"),
+    )
+    return "_".join(str(part).strip() for part in parts if str(part or "").strip())
+
+
+def _write_device_json(dry_run):
+    """按 manifest.runtime 生成 device.json：id 由 brand/region/version 拼接，
+    并带入选中 build 的 verified-boot-hash（AVB 镜像绑定哈希）。
+    """
+    runtime = manifest_runtime()
+    if not runtime:
+        print("[warn] manifest.json 缺 runtime，跳过 device.json")
+        return
+    doc = {"id": _compose_device_id(runtime, BUILD_ENTRY)}
+    boot_hash = str((BUILD_ENTRY or {}).get("verified-boot-hash") or "").strip()
+    if boot_hash:
+        doc["verified-boot-hash"] = boot_hash
+    doc.update(runtime)
+    if not doc["id"]:
+        print("[warn] manifest.json 缺 runtime.brand 或 build.region/version，id 为空")
+    if dry_run:
+        print(f"[..] (dry) 将写入 {DEVICE_JSON}（id={doc['id']!r}）")
+        return
+    tmp = DEVICE_JSON + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(doc, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+    os.replace(tmp, DEVICE_JSON)
+    print(f"[ok] device.json -> {DEVICE_JSON}（id={doc['id']}）")
+
+
 def pack(force=False, dry_run=False):
     os.makedirs(VERSION_DIR, exist_ok=True)
+    _write_device_json(dry_run)
 
     # 1) 底包 vda.raw -> 产物 vda.img（dry 只规划，不要求 super 已产出）
     vda_src = _ensure_vda_raw() if not dry_run else None

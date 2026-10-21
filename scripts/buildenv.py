@@ -141,8 +141,26 @@ def _manifest_build():
 # ---- 构建选择：CDH_BUILD_ID 优先，其次 manifest.json 首个 build ----
 BUILD_ID = env("CDH_BUILD_ID", _manifest_build().get("build-id") or "")
 
-# Android 版本（主/主.次，取自 manifest build 的 android-version，如 15.0.0）
-_ANDROID_VERSION = _manifest_build().get("android-version") or ""
+
+def _manifest_build_by_id(build_id):
+    """按 build-id 选中 build[] 条目；未匹配时回退首个条目。"""
+    builds = (_manifest().get("build") or [])
+    for entry in builds:
+        if entry.get("build-id") == build_id:
+            return entry
+    return builds[0] if builds else {}
+
+
+BUILD_ENTRY = _manifest_build_by_id(BUILD_ID)
+
+
+def manifest_runtime():
+    """读取 manifest.json 的 runtime 段（设备运行参数）；缺失返回 {}。"""
+    return dict(_manifest().get("runtime") or {})
+
+
+# Android 版本（主/主.次，取自选中 build 的 android-version，如 15.0.0）
+_ANDROID_VERSION = BUILD_ENTRY.get("android-version") or ""
 OS = _ANDROID_VERSION.split(".")[0] if _ANDROID_VERSION else "15"
 _ANDROID_MINOR = ".".join(_ANDROID_VERSION.split(".")[:2]) if _ANDROID_VERSION else "15.0"
 
