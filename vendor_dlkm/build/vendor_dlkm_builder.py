@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""gold-15 vendor_dlkm.img 重打包编排（由 build-vendor_dlkm.py 薄入口调用）。
+"""note13-5G-15 vendor_dlkm.img 重打包编排（由 build-vendor_dlkm.py 薄入口调用）。
 
 1. 以 lineage 底包 vendor_dlkm_a.img 为基座（virtio 内核匹配；MTK 厂商 vendor_dlkm
    是厂商内核模块/驱动，不可直接用于 virtio 云主机）；

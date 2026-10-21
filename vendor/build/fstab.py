@@ -1,45 +1,26 @@
-#!/usr/bin/env python3
-"""把官方 /etc/fstab.mt6833 云机化后就地覆盖 vendor 内的那份。
+"""vendor fstab：删除 lineage 基座残留的 fstab.virtio*。
 
-二阶段 `mount_all --early`（/vendor/etc/init/hw/init.mt6833.rc）读的是 /vendor 里的
-fstab，不是 boot ramdisk 那份；官方那份未派生时的实测后果：
-  * 逐个等不存在的 MTK 分区 uevent，每次 20s，`mount_all --early` 共耗 120186ms；
-  * /data 仍指 by-name/userdata（云机在 vdb）。
+云机 fstab 改由 vendor patch 树提供 /etc/fstab.mt6833（真机 gold fstab.mt6833 为基准 +
+云机特有着地：vdc/vdb/persist vfat 等；含 mi_ext 挂载、/mi_ext bind 与 overlay 全套），
+文件名与 ro.hardware=mt6833（build-vendor-boot.py 改的 androidboot.hardware）一致。
 
-派生规则见 fstab_cloud.py（与 build-boot.py 注入 ramdisk 的那份共用同一套规则）。
-覆盖方式：宿主机派生后落进工作目录，容器内 `cp` 覆盖原文件——就地覆盖保留其
-owner/mode/SELinux 标签，无需重打标签。
-
-对外：
-  generate(official_img, work_dir)   派生并落盘，返回容器脚本片段
+lineage 基座自带的 fstab.virtio / fstab.virtio.gsi.sda / fstab.virtio.gsi.vdc 已无人
+读取（旧逻辑是删 odm 行后重写，现整份由 fstab.mt6833 取代），留着只会在 /vendor/etc
+里暴露非真机文件（真机 /vendor/etc 只有 fstab.mt6833/fstab.emmc/fstab.enableswap）。
 """
 
-import os
-import subprocess
-import sys
+from debugfs import path_exists
 
-import base_fs
-from buildenv import LINEAGE_OUT_DIR
-from fstab_cloud import adapt, cloud_partitions, report
-
-FSTAB_IN_VENDOR = "/etc/fstab.mt6833"
-WORK_NAME = "cloud_fstab.mt6833"
+# lineage 基座内要删除的 fstab.virtio 系列
+FSTAB_NAMES = ("fstab.virtio", "fstab.virtio.gsi.sda", "fstab.virtio.gsi.vdc")
 
 
-def generate(official_img, work_dir):
-    """取官方 vendor 内 fstab → 云机派生 → 落工作目录，返回容器覆盖脚本。"""
-    res = subprocess.run([base_fs.erofs_tool(), f"--path={FSTAB_IN_VENDOR}",
-                          "--cat", official_img],
-                         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if res.returncode != 0 or not res.stdout:
-        print(f"[err] 官方 vendor 缺少 {FSTAB_IN_VENDOR}: "
-              f"{res.stderr.decode('utf8', 'replace')}")
-        sys.exit(1)
-
-    data, dropped, rewrote = adapt(res.stdout, cloud_partitions(LINEAGE_OUT_DIR))
-    report(dropped, rewrote, where="（/vendor 二阶段）")
-    os.makedirs(work_dir, exist_ok=True)
-    with open(os.path.join(work_dir, WORK_NAME), "wb") as f:
-        f.write(data)
-    print(f"[ok] /vendor{FSTAB_IN_VENDOR} 将替换为云机派生版（{len(data)} B）")
-    return f"cp {base_fs.C_WORKDIR}/{WORK_NAME} {base_fs.C_DST_DIR}{FSTAB_IN_VENDOR}\n"
+def fstab_cmds(work_img):
+    """产出删除基座 fstab.virtio* 的 debugfs 命令清单（存在才删）。"""
+    cmds = []
+    for name in FSTAB_NAMES:
+        img = "/etc/" + name
+        if path_exists(work_img, img):
+            cmds.append(f"rm {img}")
+            print(f"[..] 删除基座 fstab: {img}（改由 fstab.mt6833 承担）")
+    return cmds

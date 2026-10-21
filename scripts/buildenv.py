@@ -146,7 +146,7 @@ _ANDROID_VERSION = _manifest_build().get("android-version") or ""
 OS = _ANDROID_VERSION.split(".")[0] if _ANDROID_VERSION else "15"
 _ANDROID_MINOR = ".".join(_ANDROID_VERSION.split(".")[:2]) if _ANDROID_VERSION else "15.0"
 
-# 固件版本（OS3.0.5.0.VNQMIXM，取自 build-id；CDH_OS_VERSION 可覆盖）
+# 固件版本（OS3.0.9.0.VNQCNXM，取自 build-id；CDH_OS_VERSION 可覆盖）
 _OS_VER_RE = re.compile(r"OS\d+(?:\.\d+)*\.[A-Z0-9]+")
 
 

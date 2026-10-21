@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""解包 gold-15（MTK MT6833）构建输入，参考 pixel6-15 的 unpack 模式。
+"""解包 note13-5G-15（MTK MT6833）构建输入，参考 pixel6-15 的 unpack 模式。
 
 两个独立来源：
   * 官方 gold images（tgz）：解出 super.img 平铺到 roms/<解压目录>/（不建 images/ 子目录）；

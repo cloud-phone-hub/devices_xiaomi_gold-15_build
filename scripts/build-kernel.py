@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""gold-15 内核编译 + 模块分发脚本。
+"""note13-5G-15 内核编译 + 模块分发脚本。
 
 流程：
   1. 编译内核与模块：调用 kernel/build/build-kernel.sh（复用本地 builder 镜像，
@@ -111,7 +111,7 @@ def sync_kernel_dist():
 
 
 def main():
-    ap = argparse.ArgumentParser(description="gold-15 内核编译并归集模块")
+    ap = argparse.ArgumentParser(description="note13-5G-15 内核编译并归集模块")
     ap.add_argument("--only-build", action="store_true",
                     help="只编译内核/模块，不做模块归集")
     ap.add_argument("--dry-run", action="store_true",

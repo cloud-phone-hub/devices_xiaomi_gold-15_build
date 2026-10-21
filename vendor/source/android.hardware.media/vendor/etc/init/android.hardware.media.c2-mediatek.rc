@@ -12,5 +12,5 @@ service android-hardware-media-c2-hal /vendor/bin/hw/android.hardware.media.c2-m
     group camera drmrpc mediadrm media_rw sdcard_rw media system audio inet net_bt net_bt_admin net_bw_acct sdcard_r
     ioprio rt 4
     task_profiles ProcessCapacityHigh HighPerformance
-    seclabel u:r:hal_codec2_default:s0
+    seclabel u:r:mediacodec:s0
     interface aidl android.hardware.media.c2.IComponentStore/default1

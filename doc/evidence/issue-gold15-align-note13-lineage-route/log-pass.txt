@@ -1,0 +1,44 @@
+# log-pass：整树对齐 note13 路线后 gold 首启成功指标
+
+## 构建
+python3 build/main.py --from vendor  →  [ok] 全流程完成
+产物：
+  out/device/gold-15/15/os3.0.5.0.vnqmixm/vda.img   (13958643712 B)
+  out/device/gold-15/15/os3.0.5.0.vnqmixm/patch.img (402653184 B)
+  out/dist/rom/{vendor.img 372408320, vendor_dlkm.img 13209600, patch.img 402653184}
+关键日志：
+  [ok] note13 {audio,board,camera,gnss,health,light,media,media-v412,radio,sensors,thermal,vibrator,wifi,keymint} 集成完成
+  [ok] vendor_property_contexts 全量替换为 gold 版（681 条规则，不留 lineage 独有前缀）
+  [ok] patch.img -> .../patch.img（384 MiB）
+  [ok] 全流程完成
+
+## 启动（just device run 0 → 实例 12 / adb=5911）
+adb: List of devices attached  127.0.0.1:5911  device
+adb shell getprop sys.boot_completed   →  1
+adb shell getprop init.svc.zygote      →  running
+getprop | grep restarting              →  （空，无重启循环）
+
+## 关键服务
+[init.svc.audioserver]:                    [running]
+[init.svc.surfaceflinger]:                 [running]
+[init.svc.logd]:                           [running]
+[init.svc.vendor.keymint-default]:         [running]
+[init.svc.vendor.audio-hal-aidl]:          [running]
+[init.svc.vendor.audio-effect-hal-aidl]:   [running]
+
+## audio 进程（ps -A）
+  582 android.hardware.audio.service-aidl            (core)
+  584 android.hardware.audio.effect.service-aidl     (effect, IFactory v2)
+  623 audioserver
+  628 android.hardware.audio.parameter_parser.service
+  636 surfaceflinger
+
+## 身份基线生效（重生成 gold 基线的 build-prop-sets 落进 vendor build.prop）
+adb shell getprop ro.vendor.build.fingerprint
+  → Redmi/vnd_gold/gold:15/AP3A.240905.015.A2/OS3.0.5.0.VNQMIXM:user/release-keys
+adb shell getprop ro.product.vendor.model
+  → gold
+getenforce → Permissive（pioneer 云机设计）
+
+## HAL 接口计数
+lshal | grep -c android.hardware → 13

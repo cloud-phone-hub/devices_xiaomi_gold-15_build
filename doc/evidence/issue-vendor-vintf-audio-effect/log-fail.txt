@@ -1,0 +1,27 @@
+# 实例 note13-15/2 qemu.log（修复前：vintf 缺 effect 声明）
+01-01 08:00:08.913   595   595 W FactoryHal: hasAidlHalService android.hardware.audio.effect.IFactory/default: false
+01-01 08:00:08.915   595   595 E FactoryHal: Found no HAL version, main(Device) AudioHalVersion{type: AIDL, major: 1, minor: 0} null!
+01-01 08:00:08.915   595   595 W FactoryHal: hasAidlHalService android.hardware.audio.effect.IFactory/default: false
+01-01 08:00:08.916   595   595 E FactoryHal: Found no HAL version, main(Effect) null AudioHalVersion{type: AIDL, major: 1, minor: 0}!
+01-01 08:00:13.867   897   897 W FactoryHal: hasAidlHalService android.hardware.audio.effect.IFactory/default: false
+01-01 08:00:13.868   897   897 E FactoryHal: Found no HAL version, main(Device) AudioHalVersion{type: AIDL, major: 1, minor: 0} null!
+
+01-01 08:00:09.222   595   595 F libc    : Fatal signal 11 (SIGSEGV), code 1 (SEGV_MAPERR), fault addr 0x0 in tid 595 (audioserver), pid 595 (audioserver)
+01-01 08:00:13.873   897   897 F libc    : Fatal signal 11 (SIGSEGV), code 1 (SEGV_MAPERR), fault addr 0x0 in tid 897 (audioserver), pid 897 (audioserver)
+--- ---
+01-01 08:00:09.258   676   676 F DEBUG   :       #00 pc 00000000000f33d0  /system/bin/audioserver (android::AudioFlinger::onFirstRef()+704) (BuildId: 8aee46a66d2111a4bcfab328f95983d6)
+01-01 08:00:09.258   676   676 F DEBUG   :       #01 pc 0000000000096690  /system/bin/audioserver (main.cfi+352) (BuildId: 8aee46a66d2111a4bcfab328f95983d6)
+
+# 修复前 staging vintf（仅 core，无 effect 块）
+<manifest version="1.0" type="device">
+  <hal format="aidl">
+    <name>android.hardware.audio.core</name>
+    <version>2</version>
+    <fqname>IModule/default</fqname>
+  </hal>
+  <hal format="aidl">
+    <name>android.hardware.audio.core</name>
+    <version>2</version>
+    <fqname>IModule/primary</fqname>
+  </hal>
+  <hal format="aidl">

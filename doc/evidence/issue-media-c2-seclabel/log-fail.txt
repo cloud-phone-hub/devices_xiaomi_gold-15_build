@@ -1,0 +1,12 @@
+# 实例 note13-15/1 qemu.log（修复前，薄集成层改造后首次启动）
+[    9.011618][  T561] init: cannot setexeccon('u:r:hal_codec2_default:s0') for android-hardware-media-c2-hal: Invalid argument
+[    9.015212][  T567] init: cannot setexeccon('u:r:hal_codec2_default:s0') for vendor-dolby-media-c2-hal: Invalid argument
+[   14.014280][  T890] init: cannot setexeccon('u:r:hal_codec2_default:s0') for android-hardware-media-c2-hal: Invalid argument
+[   14.015130][  T891] init: cannot setexeccon('u:r:hal_codec2_default:s0') for vendor-dolby-media-c2-hal: Invalid argument
+01-01 08:00:19.008   962   962 I cdh_audio: registered android.hardware.audio.effect.IFactory/default[   19.047534][  T963] init: cannot setexeccon('u:r:hal_codec2_default:s0') for android-hardware-media-c2-hal: Invalid argument
+[   19.053622][  T966] init: cannot setexeccon('u:r:hal_codec2_default:s0') for vendor-dolby-media-c2-hal: Invalid argument
+
+# 服务状态（adb getprop）
+[init.svc.android-hardware-media-c2-hal]: [restarting]
+[init.svc.vendor-dolby-media-c2-hal]: [restarting]
+[init.svc.android-hardware-media-c2-v4l2-hal-1-2]: [running]  # 对照：seclabel=mediacodec

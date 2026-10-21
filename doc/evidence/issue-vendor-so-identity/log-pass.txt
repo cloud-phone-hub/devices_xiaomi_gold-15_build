@@ -1,0 +1,302 @@
+# log-pass —— 判定实验原始输出（真机 root，2026-10-09）
+
+> 说明：本 issue 是"定性/判定"类，尚未实施修复，故本文件不是"修复后通过日志"，
+> 而是**判定实验的完整可复现命令与原始输出**（= 结论的证据）。
+> 设备：Redmi Note 13 5G；`su` 可用（`uid=0(root) context=u:r:magisk:s0`）。
+
+## 0. 可复现命令
+
+```sh
+D=fmvwkrheonugvgjb                       # 真机 adb 序列号
+mkdir -p /tmp/soid && cd /tmp/soid
+
+# 进程/uid
+adb -s $D shell su -c id
+adb -s $D shell 'su -c "pidof zygote64; pidof zygote; pidof dev.checker"'
+adb -s $D shell "pm list packages -U | grep -i checker"
+adb -s $D shell 'su -c "ps -Ao PID,PPID,USER,NAME | grep -E \"zygote|system_server|checker\""'
+
+# 抓 maps（root）
+adb -s $D shell 'su -c "cat /proc/1/maps"'        > init.maps
+adb -s $D shell 'su -c "cat /proc/868/maps"'      > zygote64.maps
+adb -s $D shell 'su -c "cat /proc/27625/maps"'    > app.maps
+adb -s $D shell 'su -c "cat /proc/11089/maps"'    > settings.maps     # com.android.settings
+
+# 抽 vendor .so 路径集合
+for f in init zygote64 app settings; do
+  awk '{print $6}' $f.maps | grep -E '^/(vendor|odm|vendor_dlkm)/' | grep '\.so$' | sort -u > $f.vendor.so
+done
+
+# 差集 / 交集
+comm -13 zygote64.vendor.so app.vendor.so       # A \ Z
+comm -23 zygote64.vendor.so app.vendor.so       # Z \ A
+comm -12 zygote64.vendor.so app.vendor.so | wc -l
+comm -13 zygote64.vendor.so settings.vendor.so  # settings \ Z
+```
+
+## 1. 进程与 uid
+
+```
+uid=0(root) gid=0(root) groups=0(root) context=u:r:magisk:s0
+
+868      (zygote64)
+870      (zygote, 32-bit)
+27625    (dev.checker)
+
+package:dev.checker uid:10299
+
+  PID  PPID USER         NAME
+27625   868 u0_a299      dev.checker        ← 父进程 = zygote64(868)
+```
+
+## 2. maps 抓取量
+
+```
+   3312 /tmp/soid/zygote64.maps
+   4016 /tmp/soid/app.maps
+```
+
+## 3. 集合差（核心结论）
+
+```
+=== A \ Z  仅 App 进程有（= 运行时 dlopen 的）===
+/vendor/lib64/arm.graphics-V5-ndk.so
+/vendor/lib64/hw/mapper.mediatek.so
+/vendor/lib64/libdrm.so
+=== Z \ A  仅 zygote 有 ===
+(空)
+=== 交集条数 ===
+56
+```
+
+## 4. 继承实锤：地址区间逐条相同（fork COW）
+
+```
+egl/libGLES_mali.so  zygote=[6da702f000-6da7988000]  app=[6da702f000-6da7988000]
+hw/vulkan.mali.so    zygote=[6da6d5d000-6da6d5e000]  app=[6da6d5d000-6da6d5e000]
+libbase.so           zygote=[6da2dc0000-6da2dce000]  app=[6da2dc0000-6da2dce000]
+libgpud.so           zygote=[6da3347000-6da335f000]  app=[6da3347000-6da335f000]
+libutils.so          zygote=[6da6bcf000-6da6bdd000]  app=[6da6bcf000-6da6bdd000]
+```
+
+## 5. 反证：init 无此批库 / 不跑 GL 的 App 与 zygote 完全相同
+
+```
+=== init: vendor so 条数 = 0
+=== settings(com.android.settings, pid 11089): vendor so 条数 = 56
+   其中 libGLES_mali.so: 1  vulkan.mali.so: 1
+=== settings 与 zygote64 的差集（settings \ zygote64）===
+(空)
+=== settings 与 zygote64 交集条数 ===
+56
+```
+
+## 6. zygote64 的 56 条 vendor so（= 云机侧需对齐/回填的真机清单）
+
+```
+/vendor/lib64/android.hardware.common-V2-ndk.so
+/vendor/lib64/android.hardware.graphics.allocator-V2-ndk.so
+/vendor/lib64/android.hardware.graphics.common-V5-ndk.so
+/vendor/lib64/android.hardware.graphics.common@1.0.so
+/vendor/lib64/android.hardware.graphics.common@1.1.so
+/vendor/lib64/android.hardware.graphics.common@1.2.so
+/vendor/lib64/android.hardware.graphics.mapper@2.0.so
+/vendor/lib64/android.hardware.graphics.mapper@2.1.so
+/vendor/lib64/android.hardware.graphics.mapper@3.0.so
+/vendor/lib64/android.hardware.graphics.mapper@4.0.so
+/vendor/lib64/android.hidl.memory.token@1.0.so
+/vendor/lib64/android.hidl.memory@1.0.so
+/vendor/lib64/egl/libGLES_mali.so
+/vendor/lib64/egl/libGLES_meow.so
+/vendor/lib64/egl/libMEOW_data.so
+/vendor/lib64/egl/libMEOW_gift.so
+/vendor/lib64/egl/libMEOW_qt.so
+/vendor/lib64/hw/vulkan.mali.so
+/vendor/lib64/libDefaultFpsActor.so
+/vendor/lib64/libFrameRecord.so
+/vendor/lib64/libNoFpsActor.so
+/vendor/lib64/libaal_sec.so
+/vendor/lib64/libaedv.so
+/vendor/lib64/libbase.so
+/vendor/lib64/libc++.so
+/vendor/lib64/libcutils.so
+/vendor/lib64/libdmabufheap.so
+/vendor/lib64/libged.so
+/vendor/lib64/libgpu_aux.so
+/vendor/lib64/libgpud.so
+/vendor/lib64/libgralloc_extra.so
+/vendor/lib64/libgralloc_metadata.so
+/vendor/lib64/libgralloctypes.so
+/vendor/lib64/libgralloctypes_mtk.so
+/vendor/lib64/libhardware.so
+/vendor/lib64/libhidlbase.so
+/vendor/lib64/libhidlmemory.so
+/vendor/lib64/libion.so
+/vendor/lib64/libladder.so
+/vendor/lib64/liblzma.so
+/vendor/lib64/libpq_cust_base.so
+/vendor/lib64/libpqhdrmetaparser.so
+/vendor/lib64/libpqsharememory.so
+/vendor/lib64/libpqtuning.so
+/vendor/lib64/libsdrparser.so
+/vendor/lib64/libunwindstack.so
+/vendor/lib64/libutils.so
+/vendor/lib64/libutilscallstack.so
+/vendor/lib64/libz.so
+/vendor/lib64/mt6833/libaiselector.so
+/vendor/lib64/mt6833/libdpframework.so
+/vendor/lib64/mt6833/libmml.so
+/vendor/lib64/mt6833/libpq_sec.so
+/vendor/lib64/vendor.mediatek.hardware.mmagent-V1-ndk.so
+/vendor/lib64/vendor.mediatek.hardware.mms-V1-ndk.so
+/vendor/lib64/vendor.mediatek.hardware.pq_aidl-V2-ndk.so
+```
+
+## 7. App 额外自加载的 3 条（`A \ Z`）
+
+```
+/vendor/lib64/arm.graphics-V5-ndk.so
+/vendor/lib64/hw/mapper.mediatek.so
+/vendor/lib64/libdrm.so
+```
+
+## 7b. 深挖：多进程对照（谁加载的）
+
+进程祖先链（`ps -o PID,PPID,USER,NAME`）：
+
+```
+  PID  PPID USER         NAME
+    1     0 root         init
+  868     1 root         zygote64              ← zygote64 的父进程是 init
+  870     1 root         zygote                ← 32 位 zygote，同为 init 的子进程
+ 1690     1 root         zn-nsdaemon-zygote_secondary
+ 1700     1 root         zn-nsdaemon-zygote
+ 1701     ? system       system_server         ← 亦为 zygote64 的 fork
+ 2292   868 webview_zygote
+27625   868 u0_a299      dev.checker           ← 被测 App，父进程 = zygote64
+```
+
+各进程已加载 vendor `.so` 条数：
+
+```
+init      (1)     vendor_so =   0      ← 关键：init 一个都没有
+zygote64  (868)   vendor_so =  56      ← zygote 自己 mmap
+zygote 32 (870)   vendor_so =  56      ← 32 位 zygote 同样是 56
+zn-nsdaemon-zygote*(1690/1700) vendor_so = 0
+webview_zygote (2292) vendor_so = 56
+system_server  (1701) vendor_so = 59
+dev.checker    (27625) vendor_so = 59
+```
+
+- **非 init 继承**：`init` 的 1173 行 maps 里 vendor `.so` = **0**；`zygote64` 的 PPID=1，故它
+  不可能从 init 继承到这批库——是 **zygote64 自己 mmap** 的。`grep libGLES_mali|libgpud|vulkan.mali|libc++`
+  于 init maps 只命中 `/system/lib64/libc++.so`（另属 system 分区，非 vendor）。
+- **32 位 zygote 同名集合完全一致**：
+
+  ```
+  仅64位zygote: 0   仅32位zygote: 0   同名: 56
+  ```
+  （32 位 zygote 的 56 条全在 `/vendor/lib/*.so`，basename 与 64 位逐条对应）
+  ⇒ 这是 **zygote 启动时的 ABI 对称预加载**，不是被某个 App 的 GL 调用触发的。
+- **webview_zygote 与 zygote64 完全相同**（`webview\z64 = 0`、`z64\webview = 0`）⇒ 纯继承。
+- **system_server 与 App 同构**：`system_server \ zygote64 = 3`，且**就是同样那 3 条**
+  （`arm.graphics-V5-ndk.so`、`hw/mapper.mediatek.so`、`libdrm.so`）⇒ 这 3 条不是
+  "device-checker 的 GL 检查专属"，而是**进程运行时经 graphics 路径各自 dlopen**（App 与 system_server 都会）。
+
+相关属性/实物（真机）：
+
+```
+ro.zygote        = zygote64_32
+ro.hardware.egl  = meow
+ro.hardware.vulkan = mali
+ro.hardware.gralloc = (空)
+ro.board.platform  = mt6833
+zygote64 cmdline = zygote64
+/vendor/lib64/egl/ = libGLES_mali.so libGLES_meow.so libMEOW_{data,gift,qt,trace}.so（6 个，无 libEGL_meow.so）
+```
+
+## 7c. 59 条逐条归属表（I=init / Z=zygote64 预加载继承 / A=App 运行时 dlopen）
+
+生成式：`awk 'NR==FNR{z[$0]=1;next}{print (z[$0]?"Z":"A"),$0}' p868.so p27625.so`；
+init 侧另行核对（`p1.so` 为 0 条，故无任何 I）。
+
+```
+Z  /vendor/lib64/android.hardware.common-V2-ndk.so
+Z  /vendor/lib64/android.hardware.graphics.allocator-V2-ndk.so
+Z  /vendor/lib64/android.hardware.graphics.common-V5-ndk.so
+Z  /vendor/lib64/android.hardware.graphics.common@1.0.so
+Z  /vendor/lib64/android.hardware.graphics.common@1.1.so
+Z  /vendor/lib64/android.hardware.graphics.common@1.2.so
+Z  /vendor/lib64/android.hardware.graphics.mapper@2.0.so
+Z  /vendor/lib64/android.hardware.graphics.mapper@2.1.so
+Z  /vendor/lib64/android.hardware.graphics.mapper@3.0.so
+Z  /vendor/lib64/android.hardware.graphics.mapper@4.0.so
+Z  /vendor/lib64/android.hidl.memory.token@1.0.so
+Z  /vendor/lib64/android.hidl.memory@1.0.so
+A  /vendor/lib64/arm.graphics-V5-ndk.so
+Z  /vendor/lib64/egl/libGLES_mali.so
+Z  /vendor/lib64/egl/libGLES_meow.so
+Z  /vendor/lib64/egl/libMEOW_data.so
+Z  /vendor/lib64/egl/libMEOW_gift.so
+Z  /vendor/lib64/egl/libMEOW_qt.so
+A  /vendor/lib64/hw/mapper.mediatek.so
+Z  /vendor/lib64/hw/vulkan.mali.so
+Z  /vendor/lib64/libDefaultFpsActor.so
+Z  /vendor/lib64/libFrameRecord.so
+Z  /vendor/lib64/libNoFpsActor.so
+Z  /vendor/lib64/libaal_sec.so
+Z  /vendor/lib64/libaedv.so
+Z  /vendor/lib64/libbase.so
+Z  /vendor/lib64/libc++.so
+Z  /vendor/lib64/libcutils.so
+Z  /vendor/lib64/libdmabufheap.so
+A  /vendor/lib64/libdrm.so
+Z  /vendor/lib64/libged.so
+Z  /vendor/lib64/libgpu_aux.so
+Z  /vendor/lib64/libgpud.so
+Z  /vendor/lib64/libgralloc_extra.so
+Z  /vendor/lib64/libgralloc_metadata.so
+Z  /vendor/lib64/libgralloctypes.so
+Z  /vendor/lib64/libgralloctypes_mtk.so
+Z  /vendor/lib64/libhardware.so
+Z  /vendor/lib64/libhidlbase.so
+Z  /vendor/lib64/libhidlmemory.so
+Z  /vendor/lib64/libion.so
+Z  /vendor/lib64/libladder.so
+Z  /vendor/lib64/liblzma.so
+Z  /vendor/lib64/libpq_cust_base.so
+Z  /vendor/lib64/libpqhdrmetaparser.so
+Z  /vendor/lib64/libpqsharememory.so
+Z  /vendor/lib64/libpqtuning.so
+Z  /vendor/lib64/libsdrparser.so
+Z  /vendor/lib64/libunwindstack.so
+Z  /vendor/lib64/libutils.so
+Z  /vendor/lib64/libutilscallstack.so
+Z  /vendor/lib64/libz.so
+Z  /vendor/lib64/mt6833/libaiselector.so
+Z  /vendor/lib64/mt6833/libdpframework.so
+Z  /vendor/lib64/mt6833/libmml.so
+Z  /vendor/lib64/mt6833/libpq_sec.so
+Z  /vendor/lib64/vendor.mediatek.hardware.mmagent-V1-ndk.so
+Z  /vendor/lib64/vendor.mediatek.hardware.mms-V1-ndk.so
+Z  /vendor/lib64/vendor.mediatek.hardware.pq_aidl-V2-ndk.so
+```
+
+小计：**init 0 条 / zygote64 56 条 / App 3 条**（合计 59）。
+
+## 8. 云机侧同日尝试（失败，记录）
+
+```
+# 正在跑的云机实例为 15R-16 槽位 38，adb 127.0.0.1:5911（hostfwd 5911-:5555）
+adb -s 127.0.0.1:5911 shell id
+uid=2000(shell) ... context=u:r:pioneer:s0
+adb -s 127.0.0.1:5911 root
+adbd cannot run as root in production builds
+adb -s 127.0.0.1:5911 shell "su -c id"
+/system/bin/sh: su: inaccessible or not found
+adb -s 127.0.0.1:5911 shell "head -c 200 /proc/859/maps"
+head: /proc/859/maps: Permission denied
+```
+
+⇒ 云机无 root 通道（adb），读不到云机 zygote64 的 maps；且当日**没有 note13 云机实例在跑**
+（运行中的是 15R-16）。云机侧取证待解决 root 通道后进行。

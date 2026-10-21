@@ -1,4 +1,4 @@
-"""gold-15 super.img（AOSP liblp 动态分区）纯 Python 读取与原位更新。
+"""note13-5G-15 super.img（AOSP liblp 动态分区）纯 Python 读取与原位更新。
 
 官方 gold images 的 super.img 以 sparse 分发，unpack 阶段已展开为 raw。本模块直接
 解析 liblp metadata（格式见 AOSP system/core/fs_mgr/liblp/ 的 metadata_format.h），
@@ -6,7 +6,7 @@
 官方 super.img 基底做「原位覆盖」：保留官方元数据、AVB vbmeta 链与其它分区不动，
 只把自制的 vendor / vendor_dlkm 数据写回对应 extent，并做回读自检。
 
-与 pixel6-15 的 pack_super.py（全新重建 super + lpmake 布局）不同，gold 采用
+与 pixel6-15 的 pack_super.py（全新重建 super + lpmake 布局）不同，note13 采用
 pioneer-phone 的「保留官方 super 元数据、仅原位覆盖数据区」路线——MTK A/B 槽位与
 liblp 布局以官方为准，避免符号/大小漂移导致引导链失效。
 

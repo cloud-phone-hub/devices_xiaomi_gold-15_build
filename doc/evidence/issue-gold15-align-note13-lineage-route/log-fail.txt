@@ -1,0 +1,34 @@
+# log-fail：整树覆盖后 --from vendor 逐个暴露的卡点（按发生顺序）
+
+## (1) buildenv 身份未重指会把 gold 认成 note13
+覆盖后 buildenv 若沿用 note13 值：VERSION_DIR=out/device/note13-5g、_ROM_VER_RE 匹配不了
+gold_global_images build-id → 产物落错目录 / ROM 目录推导 RuntimeError。
+修复：docstring→gold-15、VERSION_DIR→gold-15、正则→^(gold(?:_[a-z]+)?_images_OS…)。
+
+## (2) gpu：官方 vendor 解包目录缺失
+[err] 官方 vendor 解包目录缺失: .../gold_global_images_OS3.0.5.0.VNQMIXM_15.0/vendor_a（先跑 unpack 阶段）
+subprocess.CalledProcessError: android.hardware.gpu/build.py returned non-zero exit status 1.
+根因：gpu scan-libs 从 ROM_ROOT_DIR/vendor_a/ 逐字节回填 6 个 GPU 库（length+sha256 契约校验），
+      该目录不在 unpack 产物内（note13 亦是流水线外一次性制备）。
+修复：宿主 dump.erofs --cat 抽 6 库到 vendor_a/lib64/*；实测 sha256/length 与 note13 契约完全一致
+      （同一 Mali/MEOW 驱动跨 CN/global 未变），无需改 gpu.json。
+
+## (3) gold_props：官方 vendor_property_contexts 缺失
+[err] 官方 vendor_property_contexts 缺失: .../vendor_a/etc/selinux/vendor_property_contexts
+[err] build-vendor.py 执行失败 (rc=1)
+根因：gold_props.PROP_CTX_SRC/GOLD_VENDOR_CIL 从 vendor_a/etc/selinux 读官方属性上下文表与 cil。
+修复：dump.erofs 抽官方 /etc/selinux 15 个常规文件到 vendor_a/etc/selinux/。
+      过点后日志：[ok] vendor_property_contexts 全量替换为 gold 版（681 条规则）
+
+## (4) inject：基线缺 gatekeeper 标签
+[err] 基线清单缺少 SELinux 标签: bin/hw/android.hardware.gatekeeper-service.mitee
+根因（双重）：
+  a. 整树覆盖后 rsync --delete 未删净 gold 独有源模块 android.hardware.gatekeeper（note13 无）。
+  b. out/dist/vendor staging 残留旧路线构建的 gatekeeper/keymint .mitee 僵尸二进制，
+     inject 扫全 staging → 无标签即报错退出（新基线=note13 183 标签，不含 gatekeeper）。
+修复：rm -rf vendor/source/android.hardware.gatekeeper + rm -rf out/dist/vendor out/tmp；
+      清后 vendor/source 模块集与 note13 逐条一致，keymint 由 note13 模块正常产出（标签在 183 内）。
+
+## 注：首轮稀疏基线的问题（在重生基线前预判）
+gold 原基线 build-prop-sets=2 条（egl/vulkan）、selinux-labels=161（旧 patch 树）——lineage 路线
+需全量属性 + 183 标签，故先以 note13 基线为模板重生成，未走到"属性集不足致 vendor 身份错乱"。

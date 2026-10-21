@@ -1,6 +1,6 @@
 """vendor_dlkm /etc/build.prop 基线对齐（参考 pixel6-15 build-vendor_dlkm.py）。
 
-官方 gold vendor_dlkm 的 /etc/build.prop 是 Redmi/gold 真实设备身份（brand /
+官方 note13 vendor_dlkm 的 /etc/build.prop 是 Redmi/gold 真实设备身份（brand /
 model / fingerprint），而 lineage 基座渲染的是 VirtIO 版本。按基线清单
 vendor-dlkm.baseline-build-prop 自官方 vendor_dlkm_a.img（EROFS，用 dump.erofs
 提取）取得官方件，按 length+sha256 校验后覆盖写入基座 /etc/build.prop。

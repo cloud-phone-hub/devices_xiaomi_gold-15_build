@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""gold-15 boot.img 打包脚本（移植自 pixel6-15 build-boot.py）。
+"""note13-5G-15 boot.img 打包脚本（移植自 pixel6-15 build-boot.py）。
 
 以 lineage-22.0 解包 boot_a.img 为基底（保留其 v4 header 结构与内嵌 initrd），
 kernel 段替换为编译的 Image，ramdisk 注入 first_stage virtio fstab 后重新对齐，
@@ -15,10 +15,8 @@ vendor_boot.img 由 build-vendor-boot.py 处理（删其 ramdisk fragment 内的
     preloader->lk 引导链的官方 boot 不适用于 QEMU/EDK II 云机。
   - fstab 注入布局对齐 cloud-droid-hub cmd/gsifix boot_firststage_fstab.go：
     各 fstab 名同时落到根/system/etc/first_stage_ramdisk/first_stage_ramdisk/system/etc 四处。
-  - fstab 名 = fstab.mt6833（ro.hardware 对齐真机 mt6833），内容取自**官方 vendor 镜像**内
-    的 /etc/fstab.mt6833（dump.erofs 提取）后再做**云机适配**：剥 avb/avb_keys、剔除非云机
-    分区的 by-name 行、/data 改 vdb、persist 改 vfat（详见 _adapt_fstab_for_cloud，每条都
-    对应起机实测证据）。
+  - fstab 名 = fstab.mt6833（云机 ro.hardware 已对齐真机 mt6833），内容取自 vendor
+    patch 树那份（/vendor/etc/fstab.mt6833 同源）。
 
 用法（可在任何目录）：
   python3 build/scripts/build-boot.py --kernel-image <Image>  # 打包 boot.img（默认 out/kernel/Image）
@@ -34,10 +32,9 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from buildenv import (  # noqa: E402
-    KERNEL_OUT, LINEAGE_OUT_DIR, ROM_DIST, ROM_ROOT_DIR,
+    KERNEL_OUT, LINEAGE_OUT_DIR, ROM_DIST,
 )
 from buildenv import env  # noqa: E402
-import fstab_cloud  # noqa: E402  # 派生规则与本目录同处，vendor 构建反向引用同一份
 
 # 设备根（本文件位于 build/scripts/ 下，向上 3 级即设备根）
 _DEVICE_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -64,9 +61,10 @@ BOOT_PAGE_SIZE = 4096
 
 MAX_BOOT_PARTITION_BYTES = 256 * 1024 * 1024
 
-# —— first_stage fstab 注入（让 EDK II 直启后的 init 首阶段能挂载各分区）。名字 =
-#   fstab.mt6833，与 init 按 ro.hardware(=mt6833，见 build-vendor-boot.py) 拼出的路径一致；
-#   内容取自官方 vendor 镜像内的 /etc/fstab.mt6833（单一来源）。
+# —— first_stage fstab 注入（对齐基线，让 EDK II 直启后的 init 首阶段能挂载
+#   /system(logical/super)/data(vdb)/metadata/mi_ext 等）。名字 = fstab.mt6833，
+#   与 init 按 ro.hardware(=mt6833，见 build-vendor-boot.py) 拼出的路径一致；内容取自
+#   vendor patch 树那份 /vendor/etc/fstab.mt6833（单一来源）。
 #   注入布局与 cloud-droid-hub cmd/gsifix boot_firststage_fstab.go 完全一致：
 #   各 fstab 名同时落到根/system/etc/first_stage_ramdisk/first_stage_ramdisk/system/etc 四处。
 _FSTAB_NAMES = (
@@ -86,116 +84,17 @@ _FSTAB_DIR_PATHS = (
     "system/etc",
 )
 
-# first stage fstab 内容来源：官方（厂商）vendor 镜像内的 /etc/fstab.mt6833。
-# 与真机一致——真机 boot ramdisk 里的 fstab.mt6833 就是 /vendor 分区那份的完整副本。
-# gold-15 的 vendor 基座即官方 vendor（见 build/vendor/build/vendor_builder.py），
-# 故直接自官方镜像取，不再由 vendor patch 树携带。
-VENDOR_OFFICIAL_IMG = os.path.join(ROM_ROOT_DIR, "vendor_a.img")
-_FSTAB_IN_VENDOR = "/etc/fstab.mt6833"
-
-
-def _erofs_tool():
-    """定位 dump.erofs；EROFSPROGS_DUMP > brew > PATH，缺失即报错。"""
-    for cand in (os.environ.get("EROFSPROGS_DUMP"),
-                 "/opt/homebrew/bin/dump.erofs", shutil.which("dump.erofs")):
-        if cand and os.path.isfile(cand):
-            return cand
-    print("[err] 缺少 dump.erofs（brew install erofs-utils）")
-    sys.exit(1)
+# first stage fstab 内容来源：与 /vendor/etc/fstab.mt6833 同一份文件（vendor patch 树，
+# 同时由 inject.py 注入 vendor 分区供二阶段 mount_all 读取），单一来源避免两处漂移。
+# 真机同此——其 boot ramdisk 里的 fstab.mt6833 就是 /vendor 分区那份的完整副本。
+_FSTAB_SRC = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "vendor", "patch", "etc", "fstab.mt6833")
 
 
 def firststage_fstab():
-    """取官方 vendor 镜像内 /etc/fstab.mt6833 的字节，做云机派生后返回。
-
-    派生规则单一来源 = build/vendor/build/fstab_cloud.py（与 vendor 二阶段那份同口径）。
-    """
-    if not os.path.isfile(VENDOR_OFFICIAL_IMG):
-        print(f"[err] 官方 vendor 缺失: {VENDOR_OFFICIAL_IMG}（先 unpack）")
-        sys.exit(1)
-    res = subprocess.run([_erofs_tool(), f"--path={_FSTAB_IN_VENDOR}", "--cat",
-                          VENDOR_OFFICIAL_IMG],
-                         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if res.returncode != 0 or not res.stdout:
-        print("[err] 官方 vendor 缺少 %s: %s"
-              % (_FSTAB_IN_VENDOR, res.stderr.decode("utf8", "replace")))
-        sys.exit(1)
-    data, dropped, rewrote = fstab_cloud.adapt(
-        res.stdout, fstab_cloud.cloud_partitions(LINEAGE_DIR))
-    fstab_cloud.report(dropped, rewrote, where="（boot ramdisk 一阶段）")
-    return data
-
-
-# 云机 persist 行的权威写法：云机该盘是 vfat（GRUB grubenv 依赖），官方写 ext4 会被
-# fs_mgr check 后格式化；与 note13 云机版同款。
-_CLOUD_PERSIST_LINE = (
-    "/dev/block/by-name/persist /mnt/vendor/persist vfat "
-    "rw,sync,shortname=lower,uid=1000,gid=1000,dmask=007,fmask=117,"
-    "context=u:object_r:persist_file:s0 formattable"
-)
-
-
-def cloud_gpt_partitions():
-    """云机 GPT 内实际存在的分区名（= lineage 底包解包导出的 <名>.img）。"""
-    if not os.path.isdir(LINEAGE_DIR):
-        print(f"[err] lineage 目录缺失: {LINEAGE_DIR}")
-        sys.exit(1)
-    names = {f[:-4] for f in os.listdir(LINEAGE_DIR) if f.endswith(".img")}
-    if not names:
-        print(f"[err] {LINEAGE_DIR} 内无分区镜像，无法判定云机分区")
-        sys.exit(1)
-    return names
-
-
-def _adapt_fstab_for_cloud(raw):
-    """把官方 MTK fstab 派生为云机版（每一条都对应实测证据）。
-
-    1) 剥掉挂载选项里的 avb / avb=… / avb_keys=…：云机无 vbmeta* 分区、不开 AVB；
-       留着 init 的 BlockDevInitializer 会等 vbmeta uevent 直到 10s 超时 abort 重启
-       （实测：partition(s) not found in /sys ... vbmeta_a/vbmeta_system_a/vbmeta_vendor_a
-        → InitFatalReboot signal 6 → reboot 循环）。
-    2) 丢弃 device 为 /dev/block/by-name/<名> 而该分区不在云机 GPT 的行（MTK 物理分区
-       rescue/protect1/protect2/nvdata/nvcfg/lk/tee/scp/…/vbmeta*）；其中带 wait 的
-       条目属"必需挂载"，二阶段必然失败。
-    3) /data：云机在独立 virtio 盘，by-name/userdata -> /dev/block/vdb。
-    4) persist：云机该盘是 vfat（见 _CLOUD_PERSIST_LINE）。
-    """
-    existing = cloud_gpt_partitions()
-    kept, dropped, rewrote = [], [], []
-    for line in raw.decode("utf-8", "replace").splitlines():
-        s = line.strip()
-        if not s or s.startswith("#"):
-            kept.append(line)
-            continue
-        f = s.split()
-        if len(f) < 5:
-            kept.append(line)
-            continue
-        dev, flags = f[0], f[4]
-        if dev.startswith("/dev/block/by-name/"):
-            name = dev[len("/dev/block/by-name/"):]
-            if name == "userdata":
-                f[0] = "/dev/block/vdb"
-                rewrote.append(f"{dev} -> /dev/block/vdb")
-            elif name == "persist":
-                kept.append(_CLOUD_PERSIST_LINE)
-                rewrote.append("persist: 官方 ext4 -> 云机 vfat")
-                continue
-            elif (name not in existing and f"{name}_a" not in existing
-                  and f"{name}_b" not in existing):
-                dropped.append(name)
-                continue
-        tokens = [t for t in flags.split(",")
-                  if t != "avb" and not t.startswith(("avb=", "avb_keys="))]
-        f[4] = ",".join(tokens)
-        kept.append(" ".join(f))
-
-    uniq = sorted(set(dropped))
-    print(f"[ok] first_stage fstab 云机适配：剔除非云机分区行 {len(dropped)} 行"
-          f"（{len(uniq)} 个分区：{'、'.join(uniq[:12])}"
-          f"{'…' if len(uniq) > 12 else ''}）")
-    for r in rewrote:
-        print(f"     改写 {r}")
-    return ("\n".join(kept) + "\n").encode()
+    with open(_FSTAB_SRC, "rb") as f:
+        return f.read()
 
 
 def _file_ok(p):
@@ -292,21 +191,12 @@ _ZYGOTE64_LINE = b"ro.zygote=zygote64"
 
 
 def _patch_zygote64_cpio_payload(name, payload):
-    """命中 ramdisk build.prop 时追加/更新关键属性（文件尾追加，幂等）。"""
+    """命中 ramdisk build.prop 时追加/更新 ro.zygote=zygote64（文件尾追加，幂等）。"""
     if name != _RAMDISK_BUILD_PROP:
         return payload
-    new_payload = payload.rstrip(b"\n")
-    if b"ro.zygote=" not in new_payload:
-        new_payload += b"\nro.zygote=zygote64"
-    if b"service.sf.prime_shader_cache=" not in new_payload:
-        new_payload += b"\nservice.sf.prime_shader_cache=0"
-    if b"ro.surface_flinger.prime_shader_cache.ultrahdr=" not in new_payload:
-        new_payload += b"\nro.surface_flinger.prime_shader_cache.ultrahdr=0"
-    if b"debug.fdsan=" not in new_payload:
-        new_payload += b"\ndebug.fdsan=warn"
-    if b"debug.fdsan.composer@3.3-se=" not in new_payload:
-        new_payload += b"\ndebug.fdsan.composer@3.3-se=warn"
-    return new_payload + b"\n"
+    if b"ro.zygote=" in payload:
+        return payload
+    return payload.rstrip(b"\n") + b"\n" + _ZYGOTE64_LINE + b"\n"
 
 
 def _rewrite_hdr_filesize(hdr, new_size):
@@ -353,7 +243,7 @@ def _read_newc_entries(data):
 def _patch_firststage_fstab_cpio(archive):
     """把 mt6833 fstab 注入 newc ramdisk，替换缺失/已有项，返回新 cpio。
 
-    内容取自官方 vendor 镜像内的 /etc/fstab.mt6833（见 firststage_fstab）。
+    内容取自 _FSTAB_SRC（vendor patch 树那份），与二阶段 /vendor/etc/fstab.mt6833 同源。
     """
     source_for = lambda name: firststage_fstab()
 
@@ -516,7 +406,7 @@ def build_boot(kernel_path):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="gold-15 boot.img 打包")
+    parser = argparse.ArgumentParser(description="note13-5G-15 boot.img 打包")
     parser.add_argument("--kernel-image", default=None,
                         help="打包用的 Image 路径（默认 out/kernel/Image）")
     args = parser.parse_args()

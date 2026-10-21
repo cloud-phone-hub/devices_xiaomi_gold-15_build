@@ -136,7 +136,8 @@ guest PCM -> ALSA `/dev/snd/pcmC0D0p` -> QEMU intel-hda -> mixeng -> coreaudio -
 2. **委托引擎**：调用 `hal_audio.build(out_dir, runtime_lib_dirs, dry_run)`，把整套
    codegen + 编译 + 链接交给 `hal/android15/android.hardware.audio/build.py`（引擎内含依赖
    校验 `check_deps`、NDK codegen、源码编译、源码态 crt 链接）。`out_dir` 传 `out/vendor`：
-   引擎产物落 `out/vendor/bin/hw`，临时工作区落 `out/vendor/tmp/audio-ndk-work`（**不进**
+   引擎产物落 `out/vendor/bin/hw`，临时工作区落 `out/tmp/audio-ndk-work`（调用时传
+   `tmp_dir=OUT_DIR`，tmp 与打包面 `out/vendor` 解耦；**不进**
    `out/dist/vendor` 打包面）。
 3. **安装二进制**：`install_binaries()` 把两个服务从 `out/vendor/bin/hw` 拷进
    `out/dist/vendor/bin/hw`（`0755`）。

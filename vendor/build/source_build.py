@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """build/vendor/source 下子构建脚本调度。
 
-在 vendor.img 重打包前，先执行各 source 子模块的 build.py（如 keymint），
+在 vendor.img 重打包前，先执行各 source 子模块的 build.py（如 daemon），
 确保产物已编译/落盘。遍历 <设备根>/build/vendor/source 的每个一级子目录，
 凡含 build.py 即依次执行（按目录名字母序）。
 

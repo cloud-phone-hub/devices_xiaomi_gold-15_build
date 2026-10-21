@@ -1,129 +1,91 @@
-#!/usr/bin/env python3
-"""vendor 注入树注入（容器内以 root 执行）。
+"""vendor 注入树 -> debugfs 命令清单。
 
-两棵注入树：
-  1) build/vendor/patch/            —— 手写注入件（rc / idc / permissions / bin）
-  2) out/dist/vendor/（VENDOR_STAGE_DIR）—— source 子构建产物（如 keymint HAL 的
-     二进制 / rc / vintf），相对路径即镜像内 /vendor 路径。
-两棵树相对路径均即 /vendor 内路径；uid/gid 强制 0:0、mode 0644（`bin/netmgr_setup`
-例外 0755，同 note13 的 inject.py）；SELinux 标签按**本设备 baselines** 的
-vendor.selinux-labels 回填（键 = 注入树内相对路径）。两树同名路径若冲突报错退出。
+注入两棵树，相对路径即镜像内 /vendor 路径：
+  1. build/vendor/patch（seasoning）：bin/logcat-dump、etc/init/*.rc、
+     etc/permissions/*.xml 等，默认文件模式 0644。
+  2. out/dist/vendor（source 子模块落盘）：bin/daemon 等编译产物，可执行文件
+     模式 0755。
 
-标签缺键由编排层在起容器之前即报错退出（vendor_builder 里做），容器内只负责落盘，
-故本模块的容器脚本直接 `labels[rel]` 取值。
-
-对外：
-  patch_files()                   注入树内所有文件的相对路径（排序）
-  missing(files, labels)          缺标签的键
-  labels()                        本设备 baselines 的 vendor.selinux-labels
-  write_workspace(work_dir, labels)   落盘容器要用的两个文件
-  mounts()                        容器挂载表
-  script()                        容器脚本片段（由编排层拼装）
+SELinux 标签统一按基线 vendor.selinux-labels 回填（键 = 注入树内相对路径），
+缺失即报错退出。staging 树缺失/为空时静默跳过（产物可未编译）。
 """
 
-import json
 import os
+import sys
 
-from base_fs import C_WORKDIR
 from buildenv import VENDOR_PATCH_DIR, VENDOR_STAGE_DIR
+from debugfs import path_exists
+from selinux import patch_labels
 
-# 注入规则（同 note13 inject.py）：常规 0644 / 可执行 0755 / 归属 0:0
-# 可执行判定：`bin/**` 一律 0755（Android /vendor/bin 惯例，HAL 二进制必须可执行），
-# 另加 PATCH_EXEC 显式名单（兼容历史项）。
+# 常规数据文件（patch 树）
+MODE_FILE = 0o100644      # 0x81a4
+# 可执行文件（staging 树），如 /vendor/bin/daemon
+MODE_EXEC = 0o100755      # 0x8175
+# patch 树内需可执行位的脚本（init service 直接 exec，如 bin/netmgr_setup）
 PATCH_EXEC = {"bin/netmgr_setup"}
-MODE_FILE = 0o644
-MODE_EXEC = 0o755
+# staging 树内需要常规数据模式（0644）的文件：staging 默认按可执行产物打 0755，
+# 但 source/android.hardware.gpu 落盘的是 interposer 与回填的共享库，带可执行位会
+# 与官方/基座原模式不一致（且 same_process_hal_file 的 .so 本就不该带可执行位）。
+STAGE_FILE = {
+    "lib64/egl/libEGL_meow.so",
+    "lib64/egl/libGLESv1_CM_meow.so",
+    "lib64/egl/libGLESv2_meow.so",
+    "lib64/hw/vulkan.mali.so",
+    # 官方 gold vendor 回填件（文件扫描面）
+    "lib64/egl/libGLES_mali.so",
+    "lib64/egl/libMEOW_data.so",
+    "lib64/egl/libMEOW_gift.so",
+    "lib64/egl/libMEOW_qt.so",
+    "lib64/egl/libMEOW_trace.so",
+    "lib64/libOpenCL.so",
+    # rc 是配置文件：真机 /vendor/etc/init/*.rc 为 0644，staging 默认 0755 会偏
+    # （chipinfo_init.rc 由 source/android.hardware.board 落盘）
+    "etc/init/chipinfo_init.rc",
+}
 
-# 两棵注入树：宿主目录 -> 容器内挂载点
-TREES = [(VENDOR_PATCH_DIR, "/patch"), (VENDOR_STAGE_DIR, "/stage")]
-# 容器内遍历用挂载点（与 TREES 的容器侧一致）
-CONTAINER_TREES = [cont for _src, cont in TREES]
 
-LABELS_JSON = "labels.json"
-INJECT_SCRIPT = "inject_patch.py"
-
-INJECT_PY = r'''#!/usr/bin/env python3
-import json, os
-
-DST = "%(dst)s"
-CONTREES = %(contrees)r
-PATCH_EXEC = %(exec_set)r
-MODE_FILE = %(mode_file)#o
-MODE_EXEC = %(mode_exec)#o
-
-labels = json.load(open("%(workdir)s/%(labels)s", encoding="utf-8"))
-
-n = 0
-for src_dir in CONTREES:
-    if not os.path.isdir(src_dir):
-        continue
-    for root, _dirs, files in os.walk(src_dir):
+def _inject_tree(work_img, tree_dir, labels, cmds, mode):
+    """注入单个注入树，返回注入文件数；标签缺失即报错退出。"""
+    if not os.path.isdir(tree_dir):
+        return 0
+    n = 0
+    for root, _dirs, files in os.walk(tree_dir):
+        rel = os.path.relpath(root, tree_dir)
+        img_dir = "/" if rel == "." else "/" + rel.replace(os.sep, "/")
+        if not path_exists(work_img, img_dir):
+            cmds.append(f"mkdir {img_dir}")
         for name in files:
             if name == ".DS_Store":
                 continue
-            src = os.path.join(root, name)
-            rel = os.path.relpath(src, src_dir).replace(os.sep, "/")
-            dst = os.path.join(DST, rel)
-            os.makedirs(os.path.dirname(dst), exist_ok=True)
-            with open(src, "rb") as f:
-                data = f.read()
-            with open(dst, "wb") as f:
-                f.write(data)
-            os.chown(dst, 0, 0)
-            exec_path = rel in PATCH_EXEC or rel.startswith("bin/")
-            os.chmod(dst, MODE_EXEC if exec_path else MODE_FILE)
-            os.setxattr(dst, "security.selinux", labels[rel].encode())
+            host = os.path.join(root, name)
+            img = img_dir + "/" + name
+            rel_key = os.path.relpath(host, tree_dir).replace(os.sep, "/")
+            label = labels.get(rel_key)
+            if not label:
+                print(f"[err] 基线清单缺少 SELinux 标签: {rel_key}")
+                sys.exit(1)
+            file_mode = MODE_EXEC if rel_key in PATCH_EXEC else mode
+            if mode == MODE_EXEC and rel_key in STAGE_FILE:
+                file_mode = MODE_FILE
+            if path_exists(work_img, img):
+                cmds.append(f"rm {img}")
+            cmds += [
+                f"write {host} {img}",
+                f"sif {img} mode {file_mode:#x}",
+                f"sif {img} uid 0",
+                f"sif {img} gid 0",
+                f"ea_set {img} security.selinux {label}",
+            ]
             n += 1
-
-print(f"[ok] 注入 patch/stage 树 {n} 个文件（标签按本设备 baselines 回填）")
-''' % {"dst": "/mnt/dst", "contrees": CONTAINER_TREES, "exec_set": PATCH_EXEC,
-       "mode_file": MODE_FILE, "mode_exec": MODE_EXEC,
-       "workdir": C_WORKDIR, "labels": LABELS_JSON}
+    return n
 
 
-def patch_files():
-    """两棵注入树内所有文件的相对路径（排序，排除 .DS_Store；同名冲突报错）。"""
-    out = []
-    for src_dir, _cont in TREES:
-        if not os.path.isdir(src_dir):
-            continue
-        for root, _dirs, files in os.walk(src_dir):
-            for name in files:
-                if name == ".DS_Store":
-                    continue
-                out.append(os.path.relpath(os.path.join(root, name),
-                                           src_dir).replace(os.sep, "/"))
-    dup = {r for r in out if out.count(r) > 1}
-    if dup:
-        raise SystemExit(f"[err] 注入树存在同名冲突: {sorted(dup)}")
-    return sorted(out)
-
-
-def labels():
-    """本设备 baselines 的 vendor.selinux-labels（键 = 注入树内相对路径）。"""
-    from buildenv import load_baselines
-    return (load_baselines() or {}).get("vendor", {}).get("selinux-labels", {}) or {}
-
-
-def missing(files, labels_map):
-    return [f for f in files if f not in labels_map]
-
-
-def write_workspace(work_dir, labels_map):
-    """落盘容器内要用的两个文件：注入脚本 + 标签表。"""
-    os.makedirs(work_dir, exist_ok=True)
-    with open(os.path.join(work_dir, INJECT_SCRIPT), "w", encoding="utf-8") as f:
-        f.write(INJECT_PY)
-    with open(os.path.join(work_dir, LABELS_JSON), "w", encoding="utf-8") as f:
-        json.dump(labels_map, f, ensure_ascii=False, indent=2)
-
-
-def mounts(work_dir):
-    """容器挂载表：两棵注入树（只读）+ 工作目录（可写）。"""
-    out = [(src, cont, True) for src, cont in TREES if os.path.isdir(src)]
-    out.append((work_dir, C_WORKDIR, False))
-    return out
-
-
-def script():
-    return f"python3 {C_WORKDIR}/{INJECT_SCRIPT}\n"
+def inject_cmds(work_img):
+    """walk 注入树，产出注入 debugfs 命令（mkdir/rm/write/sif/ea_set）。"""
+    labels = patch_labels()
+    cmds = []
+    n = 0
+    n += _inject_tree(work_img, VENDOR_PATCH_DIR, labels, cmds, MODE_FILE)
+    n += _inject_tree(work_img, VENDOR_STAGE_DIR, labels, cmds, MODE_EXEC)
+    print(f"[..] 注入树: {n} 个文件 -> {VENDOR_PATCH_DIR} + {VENDOR_STAGE_DIR}")
+    return cmds

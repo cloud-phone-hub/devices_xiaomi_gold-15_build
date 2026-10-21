@@ -1,0 +1,11 @@
+# 实例 note13-15/3（修复后）adb 实测
+[sys.boot_completed]: [1]
+[init.svc.audioserver]: [running]  (pid 593, 开机后未重启)
+[init.svc.vendor.audio-hal-aidl]: [running]  (pid 551)
+[init.svc.vendor.audio-effect-hal-aidl]: [running]  (pid 554)
+30  android.hardware.audio.core.IConfig/default: [android.hardware.audio.core.IConfig]
+31  android.hardware.audio.core.IModule/default: [android.hardware.audio.core.IModule]
+32  android.hardware.audio.core.IModule/primary: [android.hardware.audio.core.IModule]
+33  android.hardware.audio.core.IModule/r_submix: [android.hardware.audio.core.IModule]
+34  android.hardware.audio.effect.IFactory/default: [android.hardware.audio.effect.IFactory]
+logcat -b crash: audioserver/audio 崩溃计数 = 0；getprop 全表无 [restarting] 服务

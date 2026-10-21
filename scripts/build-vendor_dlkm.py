@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""gold-15 vendor_dlkm.img 重打包——薄入口。
+"""note13-5G-15 vendor_dlkm.img 重打包——薄入口。
 
 具体实现见 build/vendor_dlkm/build/vendor_dlkm_builder.py；此处仅解析参数并委托。
   1. 以 lineage vendor_dlkm_a.img 为基座（virtio 内核匹配）
@@ -26,7 +26,7 @@ from vendor_dlkm_builder import build_vendor_dlkm  # noqa: E402
 
 
 def main():
-    ap = argparse.ArgumentParser(description="gold-15 vendor_dlkm.img 重打包")
+    ap = argparse.ArgumentParser(description="note13-5G-15 vendor_dlkm.img 重打包")
     ap.add_argument("--dry-run", action="store_true", help="只打印不执行")
     args = ap.parse_args()
     sys.exit(build_vendor_dlkm(dry_run=args.dry_run))

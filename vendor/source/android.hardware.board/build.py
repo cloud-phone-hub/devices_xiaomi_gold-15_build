@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""xiaomi gold（Redmi Note 13 5G, android15）—— board（chipinfo）设备集成层。
+"""xiaomi note13（Redmi Note 13 5G, android15）—— board（chipinfo）设备集成层。
 
 本模块**不自行编译** chipinfo：整套编译委托给
 `hal/android15/android.hardware.board/build.py` 的 `build(out_dir, runtime_lib_dirs, dry_run)`。
-gold 只做设备集成层独有的三件事：
+note13 只做设备集成层独有的三件事：
   1. 把引擎产出的二进制从 `<out>/vendor/bin/hw/android.hardware.board-service` 拷进 /vendor staging 的 bin/hw/；
-  2. 落 **gold 独有配置**（本目录 vendor/：chipinfo_init.rc、SoC 身份 cfg）；
+  2. 落 **note13 独有配置**（本目录 vendor/：chipinfo_init.rc、SoC 身份 cfg）；
   3. 登记 SELinux（chipinfo_exec / vendor_configs_file）。
 
 SoC 身份属性（ro.vendor.soc.*）在 vendor/etc/cfg/cdh_board.cfg，装进 /vendor/etc/cfg/
@@ -16,7 +16,7 @@ SoC 身份属性（ro.vendor.soc.*）在 vendor/etc/cfg/cdh_board.cfg，装进 /
   out/dist/vendor/etc/init/chipinfo_init.rc
   out/dist/vendor/etc/cfg/cdh_board.cfg
 
-用法（在设备根 devices/xiaomi/gold-15 执行）：
+用法（在设备根 devices/xiaomi/note13-5G-15 执行）：
   python3 build/vendor/source/android.hardware.board/build.py
   python3 build/vendor/source/android.hardware.board/build.py --dry-run
 """
@@ -54,7 +54,7 @@ hal_board = _load_by_path("cdh_hal_board_engine", _HAL_ENGINE)
 
 ENGINE_OUT_DIR = os.path.join(OUT_DIR, "vendor")
 
-# ---- gold 独有配置 / SELinux ----
+# ---- note13 独有配置 / SELinux ----
 BINARY = hal_board.BINARY                       # "android.hardware.board-service"
 BIN_SUBDIR = hal_board.BIN_SUBDIR               # "bin/hw"
 RC_NAME = "chipinfo_init.rc"                       # 沿用官方 rc 名以覆盖之（官方 rc execs 旧 /vendor/bin/chipinfo）
@@ -138,7 +138,7 @@ def register_labels(baselines_path, dry_run=False):
 def build(dry_run=False):
     # board 纯 C：无 AIDL codegen、无运行库，引擎 build 忽略 runtime。
     print(f"==> 委托 hal 引擎：编译 chipinfo（out={ENGINE_OUT_DIR}）")
-    hal_board.build(ENGINE_OUT_DIR, dry_run=dry_run)
+    hal_board.build(ENGINE_OUT_DIR, tmp_dir=OUT_DIR, dry_run=dry_run)
 
     print("==> 安装二进制到 /vendor staging")
     install_binary(dry_run=dry_run)
@@ -150,13 +150,13 @@ def build(dry_run=False):
     print("==> SELinux 标签登记")
     register_labels(baselines_file(), dry_run=dry_run)
 
-    print("[ok] gold board 集成完成（委托 hal 引擎构建 + gold 配置）")
+    print("[ok] note13 board 集成完成（委托 hal 引擎构建 + note13 配置）")
     return 0
 
 
 def main():
     ap = argparse.ArgumentParser(
-        description="xiaomi gold board（chipinfo）设备集成层（委托 hal 引擎构建）")
+        description="xiaomi note13 board（chipinfo）设备集成层（委托 hal 引擎构建）")
     ap.add_argument("--dry-run", action="store_true", help="只打印不执行")
     args = ap.parse_args()
     sys.exit(build(dry_run=args.dry_run))

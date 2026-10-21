@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""gold-15 vendor_boot.img 处理：删除 ramdisk fragment 内的 first_stage fstab 副本。
+"""note13-5G-15 vendor_boot.img 处理：删除 ramdisk fragment 内的 first_stage fstab 副本。
 
 为什么删：lineage vendor_boot 的 platform fragment 里带一份 lineage 原版
 `first_stage_ramdisk/system/etc/fstab.virtio`（含 odm 挂载、无 vdc /mnt）。
@@ -236,7 +236,7 @@ def build_vendor_boot(dry_run=False):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="gold-15 vendor_boot.img 处理")
+    ap = argparse.ArgumentParser(description="note13-5G-15 vendor_boot.img 处理")
     ap.add_argument("--dry-run", action="store_true", help="只打印不执行")
     args = ap.parse_args()
     sys.exit(build_vendor_boot(dry_run=args.dry_run))

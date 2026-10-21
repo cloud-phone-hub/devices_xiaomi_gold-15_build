@@ -1,0 +1,6 @@
+# 实例 note13-15/3（修复后）adb getprop / service list
+[init.svc.android-hardware-media-c2-hal]: [running]
+[init.svc.android-hardware-media-c2-v4l2-hal-1-2]: [running]
+[init.svc.vendor-dolby-media-c2-hal]: [running]
+[sys.boot_completed]: [1]
+service list: android.hardware.media.c2.IComponentStore default/default1/default9/software 全部在列

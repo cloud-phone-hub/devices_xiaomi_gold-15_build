@@ -1,24 +1,24 @@
 #!/usr/bin/env python3
-"""xiaomi gold（Redmi Note 13 5G, android15）—— AIDL health HAL 设备集成层。
+"""xiaomi note13（Redmi Note 13 5G, android15）—— AIDL health HAL 设备集成层。
 
 本模块**不自行编译/链接驱动**：codegen + 编译 + 链接整套流水线全部委托给
 `hal/android15/android.hardware.health/build.py` 的
-`build(out_dir, runtime_lib_dirs, dry_run)`。gold 只做设备集成层独有的两件事：
+`build(out_dir, runtime_lib_dirs, dry_run)`。note13 只做设备集成层独有的两件事：
   1. 把引擎产出的服务二进制从 `<out>/vendor/bin/hw` 拷进 /vendor staging
      （`out/dist/vendor/bin/hw`）；
-  2. 落 **gold 独有配置**（本目录 vendor/：rc、vintf）并登记 SELinux。
+  2. 落 **note13 独有配置**（本目录 vendor/：rc、vintf）并登记 SELinux。
 
 职责划分：
   * 驱动**源码 / AIDL 快照 / platform 头 / 工具链 / codegen+编译+链接**
     全在 hal/android15 —— 本模块不再复制该流水线（无 src/aidl/deps.py 自带实现）；
-  * 本目录只放 **gold 设备独有配置** vendor/；
-  * 运行库 ABI（libc++/libbinder_ndk）→ gold 官方镜像研磨
+  * 本目录只放 **note13 设备独有配置** vendor/；
+  * 运行库 ABI（libc++/libbinder_ndk）→ note13 官方镜像研磨
     （build/vendor/build/deps.py prepare_runtime_libs），也可经 CDH_RUNTIME 借用他机。
 
 产物（仅服务，framework 依赖一律不得链入）：
   out/dist/vendor/bin/hw/android.hardware.health-service.example
 
-用法（在设备根 devices/xiaomi/gold-15 执行，前置：hal deps 就绪）：
+用法（在设备根 devices/xiaomi/note13-5G-15 执行，前置：hal deps 就绪）：
   python3 build/vendor/source/android.hardware.health/build.py
   python3 build/vendor/source/android.hardware.health/build.py --dry-run
 """
@@ -31,12 +31,12 @@ import shutil
 import sys
 import tempfile
 
-# 本文件位于 devices/xiaomi/gold-15/build/vendor/source/<module>/ 下
+# 本文件位于 devices/xiaomi/note13-5G-15/build/vendor/source/<module>/ 下
 MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 # 上跳 4 级 <module> -> source -> vendor -> build -> 设备根
 _DEVICE_ROOT = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.dirname(MODULE_DIR))))
-# 仓库根（gold-15 -> xiaomi -> devices -> 仓库根）
+# 仓库根（note13-5G-15 -> xiaomi -> devices -> 仓库根）
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(_DEVICE_ROOT)))
 
 # hal/android15 线：驱动 codegen+编译+链接的规范引擎
@@ -45,6 +45,7 @@ _HAL_ENGINE = os.path.join(_HAL_ROOT, "android.hardware.health", "build.py")
 
 # 设备 buildenv（唯一名，正常 import）
 sys.path.insert(0, os.path.join(_DEVICE_ROOT, "build", "scripts"))
+sys.path.insert(0, os.path.join(_DEVICE_ROOT, "build", "vendor", "build"))
 from buildenv import OUT_DIR, VENDOR_STAGE_DIR, baselines_file  # noqa: E402
 
 
@@ -57,33 +58,33 @@ def _load_by_path(name, path):
     return mod
 
 
-# gold 设备共享依赖（ABI 运行库研磨）
+# note13 设备共享依赖（ABI 运行库研磨）
 device_deps = _load_by_path(
     "cdh_device_deps", os.path.join(_DEVICE_ROOT, "build", "vendor", "build", "deps.py"))
 # hal 线 health 构建引擎：build(out_dir, runtime_lib_dirs, dry_run)
 hal_health = _load_by_path("cdh_hal_health_engine", _HAL_ENGINE)
 
 # 引擎产物根：bin/hw 落 <out>/vendor（= buildenv VENDOR_OUT），
-# tmp 工作区随附其下，**不进 vendor staging**（out/dist/vendor 是打包镜像面）
+# tmp 工作区经 tmp_dir 落 out/tmp，**不进 vendor staging**（out/dist/vendor 是打包镜像面）
 ENGINE_OUT_DIR = os.path.join(OUT_DIR, "vendor")
 
-# ---- gold 独有配置 / SELinux（引擎不关心，设备层职责）----
+# ---- note13 独有配置 / SELinux（引擎不关心，设备层职责）----
 RC_NAME = "android.hardware.health-service.rc"
-VINTF_NAMES = ["android.hardware.health-service.xml"]
+# 不落 vintf 片段：官方 vendor 的 android.hardware.health-service.example.xml 已声明
+# IHealth/default，重复会让 VINTF 整体解析失败→ early boot 卡死（实测 2026-10-20）。
+VINTF_NAMES = ['android.hardware.health-service.xml']
 LABEL_BIN = "u:object_r:hal_health_default_exec:s0"
 LABEL_CONFIG = "u:object_r:vendor_configs_file:s0"
 
 
 def prepare_abi(dry_run=False):
     """运行库**目录列表**：CDH_RUNTIME 显式指定（可用 os.pathsep 传多目录，
-    单目录也兼容），否则研磨 gold 官方镜像（vendor-/system-compile-deps 两个 lib64）。"""
+    单目录也兼容），否则研磨 note13 lineage super（单目录 vendor-compile-dep）。"""
     env = os.environ.get("CDH_RUNTIME")
     if env:
         return [p for p in env.split(os.pathsep) if p]
-    if dry_run and not os.path.isdir(device_deps.VENDOR_COMPILE_DEP_DIR):
-        return [os.path.join("<out>", "runtime_lib_dir", "vendor-compile-deps", "lib64"),
-                os.path.join("<out>", "runtime_lib_dir", "system-compile-deps", "lib64")]
-    return device_deps.prepare_runtime_libs(dry_run)
+    d = device_deps.prepare_runtime_libs(dry_run)
+    return [d] if isinstance(d, str) else d
 
 
 def install_binaries(dry_run=False):
@@ -166,13 +167,13 @@ def build(dry_run=False):
     # 1) 整套 codegen + 编译 + 链接委托给 hal 线规范引擎（产物落 ENGINE_OUT_DIR）
     print(f"==> 委托 hal 引擎：codegen + 编译 + 链接"
           f"（out={ENGINE_OUT_DIR}, runtime={runtime}）")
-    hal_health.build(ENGINE_OUT_DIR, runtime, dry_run=dry_run)
+    hal_health.build(ENGINE_OUT_DIR, runtime, tmp_dir=OUT_DIR, dry_run=dry_run)
 
     # 2) 引擎产物 -> /vendor staging（tmp 工作区不随镜像走）
     print("==> 安装服务二进制到 /vendor staging")
     install_binaries(dry_run=dry_run)
 
-    # 3) gold 独有配置 + SELinux（设备集成层职责）
+    # 3) note13 独有配置 + SELinux（设备集成层职责）
     print("==> rc / vintf")
     write_rc(os.path.join(VENDOR_STAGE_DIR, "etc", "init", RC_NAME))
     for v in VINTF_NAMES:
@@ -181,13 +182,13 @@ def build(dry_run=False):
     print("==> SELinux 标签登记")
     register_labels(baselines_file(), dry_run=dry_run)
 
-    print("[ok] gold health 集成完成（委托 hal 引擎构建 + gold 配置）")
+    print("[ok] note13 health 集成完成（委托 hal 引擎构建 + note13 配置）")
     return 0
 
 
 def main():
     ap = argparse.ArgumentParser(
-        description="xiaomi gold AIDL health HAL 设备集成层（委托 hal 引擎构建）")
+        description="xiaomi note13 AIDL health HAL 设备集成层（委托 hal 引擎构建）")
     ap.add_argument("--dry-run", action="store_true", help="只打印不执行")
     args = ap.parse_args()
     sys.exit(build(dry_run=args.dry_run))

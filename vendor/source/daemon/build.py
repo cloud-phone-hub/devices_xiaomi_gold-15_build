@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""gold-15 guest 守护进程：编译 + 落盘 /vendor/bin/daemon。
+"""note13-5G-15 guest 守护进程：编译 + 落盘 /vendor/bin/daemon。
 
 编译源：core/guest/daemon（Rust workspace，[[bin]] 产物名 guest-daemon）。
 复用 core 模块的 guest-main（NDK + Rust 交叉编译 aarch64-linux-android），
@@ -8,11 +8,9 @@
 产物按 cph_daemon.rc 的 service 声明（/vendor/bin/daemon）放到
 <设备根>/out/dist/vendor/bin/daemon。
 
-移植自 note13-5G-15 build/vendor/source/daemon/build.py（同项目同件，设备无关）。
-
 用法：
-  python3 build/vendor/source/daemon/build.py
-  python3 build/vendor/source/daemon/build.py --dry-run   # 只打印将执行的动作
+  python3 build/vendor/daemon/build_daemon.py
+  python3 build/vendor/daemon/build_daemon.py --dry-run   # 只打印将执行的动作
 """
 
 import argparse
@@ -56,7 +54,7 @@ def build_guest_daemon(dry_run=False):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="gold-15 guest 守护进程构建")
+    ap = argparse.ArgumentParser(description="note13-5G-15 guest 守护进程构建")
     ap.add_argument("--dry-run", action="store_true", help="只打印不执行")
     args = ap.parse_args()
     sys.exit(build_guest_daemon(dry_run=args.dry_run))

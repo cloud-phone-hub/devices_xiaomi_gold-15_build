@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""xiaomi gold（Redmi Note 13 5G, android15）—— AIDL gnss HAL 设备集成层。
+"""xiaomi note13（Redmi Note 13 5G, android15）—— AIDL gnss HAL 设备集成层。
 
 本模块**不自行编译/链接驱动**：codegen + 编译 + 链接整套流水线全部委托给
 `hal/android15/android.hardware.gnss/build.py` 的
-`build(out_dir, runtime_lib_dirs, dry_run)`。gold 只做设备集成层独有的事：
+`build(out_dir, runtime_lib_dirs, dry_run)`。note13 只做设备集成层独有的事：
   1. 把引擎产出的服务二进制从 `<out>/vendor/bin/hw` 拷进 /vendor staging；
-  2. 落 **gold 独有配置**（本目录 vendor/：rc、vintf、permissions、设备值 cfg）并登记 SELinux。
+  2. 落 **note13 独有配置**（本目录 vendor/：rc、vintf、permissions、设备值 cfg）并登记 SELinux。
 
 默认 fix / 能力位 / systemInfo / 控制文件路径在 vendor/etc/cfg/cdh_gnss.cfg，装进
 /vendor/etc/cfg/ 供驱动运行时读取（对齐 audio 外置做法，改设备值不重编驱动）。
@@ -15,7 +15,7 @@ permissions/android.hardware.location.gps.xml 声明 location/location.gps 特�
 产物（仅服务，framework 依赖一律不得链入）：
   out/dist/vendor/bin/hw/android.hardware.gnss-service.cdh
 
-用法（在设备根 devices/xiaomi/gold-15 执行，前置：hal deps 就绪）：
+用法（在设备根 devices/xiaomi/note13-5G-15 执行，前置：hal deps 就绪）：
   python3 build/vendor/source/android.hardware.gnss/build.py
   python3 build/vendor/source/android.hardware.gnss/build.py --dry-run
 """
@@ -37,6 +37,7 @@ _HAL_ROOT = os.path.join(_REPO_ROOT, "hal", "android15")
 _HAL_ENGINE = os.path.join(_HAL_ROOT, "android.hardware.gnss", "build.py")
 
 sys.path.insert(0, os.path.join(_DEVICE_ROOT, "build", "scripts"))
+sys.path.insert(0, os.path.join(_DEVICE_ROOT, "build", "vendor", "build"))
 from buildenv import OUT_DIR, VENDOR_STAGE_DIR, baselines_file  # noqa: E402
 
 
@@ -55,9 +56,11 @@ hal_gnss = _load_by_path("cdh_hal_gnss_engine", _HAL_ENGINE)
 
 ENGINE_OUT_DIR = os.path.join(OUT_DIR, "vendor")
 
-# ---- gold 独有配置 / SELinux ----
+# ---- note13 独有配置 / SELinux ----
 RC_NAME = "android.hardware.gnss-service.rc"
-VINTF_NAMES = ["android.hardware.gnss-service.xml"]
+# 不落 vintf 片段：官方 vendor 的 gnss-default.xml 已声明 IGnss/default，重复会让
+# VINTF 整体解析失败（NULL VINTF MANIFEST）→ early boot 卡死（实测 2026-10-20）。
+VINTF_NAMES = ['android.hardware.gnss-service.xml']
 PERM_NAMES = ["android.hardware.location.gps.xml"]
 MODULE_CFG_NAME = "cdh_gnss.cfg"
 LABEL_BIN = "u:object_r:hal_gnss_default_exec:s0"
@@ -66,14 +69,12 @@ LABEL_CONFIG = "u:object_r:vendor_configs_file:s0"
 
 def prepare_abi(dry_run=False):
     """运行库**目录列表**：CDH_RUNTIME 优先（os.pathsep 传多目录，单目录兼容），
-    否则研磨 gold 官方镜像（vendor-/system-compile-deps 两个 lib64）。"""
+    否则研磨 note13 lineage super（单目录 vendor-compile-dep）。"""
     env = os.environ.get("CDH_RUNTIME")
     if env:
         return [p for p in env.split(os.pathsep) if p]
-    if dry_run and not os.path.isdir(device_deps.VENDOR_COMPILE_DEP_DIR):
-        return [os.path.join("<out>", "runtime_lib_dir", "vendor-compile-deps", "lib64"),
-                os.path.join("<out>", "runtime_lib_dir", "system-compile-deps", "lib64")]
-    return device_deps.prepare_runtime_libs(dry_run)
+    d = device_deps.prepare_runtime_libs(dry_run)
+    return [d] if isinstance(d, str) else d
 
 
 def install_binaries(dry_run=False):
@@ -167,7 +168,7 @@ def build(dry_run=False):
 
     print(f"==> 委托 hal 引擎：codegen + 编译 + 链接"
           f"（out={ENGINE_OUT_DIR}, runtime={runtime}）")
-    hal_gnss.build(ENGINE_OUT_DIR, runtime, dry_run=dry_run)
+    hal_gnss.build(ENGINE_OUT_DIR, runtime, tmp_dir=OUT_DIR, dry_run=dry_run)
 
     print("==> 安装服务二进制到 /vendor staging")
     install_binaries(dry_run=dry_run)
@@ -183,13 +184,13 @@ def build(dry_run=False):
     print("==> SELinux 标签登记")
     register_labels(baselines_file(), dry_run=dry_run)
 
-    print("[ok] gold gnss 集成完成（委托 hal 引擎构建 + gold 配置）")
+    print("[ok] note13 gnss 集成完成（委托 hal 引擎构建 + note13 配置）")
     return 0
 
 
 def main():
     ap = argparse.ArgumentParser(
-        description="xiaomi gold AIDL gnss HAL 设备集成层（委托 hal 引擎构建）")
+        description="xiaomi note13 AIDL gnss HAL 设备集成层（委托 hal 引擎构建）")
     ap.add_argument("--dry-run", action="store_true", help="只打印不执行")
     args = ap.parse_args()
     sys.exit(build(dry_run=args.dry_run))

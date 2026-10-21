@@ -1,0 +1,86 @@
+# log-fail —— 问题现场 / 原假设被证伪（2026-10-08 云机现状 + 2026-10-09 真机反证）
+
+## A. 目标问题的失败现场（云机 App 观测面 ≠ 真机）
+
+来源：`build/doc/vendor-so-identity.md` §1（2026-10-08，同一 /api/run 同时下发真机与云机）
+
+```
+真机 07cf5fc1784783d5        : 已加载 vendor .so = 59（其中 GPU 相关 24）
+云机 45f7d12fa6045270-cloud  : 已加载 vendor .so = 35（其中 GPU 相关 22）
+同名交集 = 20；其中 md5 一致 = 1（仅 /vendor/lib64/libc++.so）；其余 19 条 md5 不同
+```
+
+——即目标（名字+md5 与真机一致）未达成。
+
+## B. §14 v1（内核 uid 分流）的前提
+
+v1 的设计前提（原文口径）：
+
+```
+App maps 里的 /vendor/lib64/*.so ≈ 该 App 进程运行时 dlopen 的
+→ 在 getname_flags 里按 current_fsuid() >= 10000 放行 App，
+   App 直读官方 gold /vendor 即可让名字+md5 与真机一致。
+```
+
+该前提要求"路径由 App 进程解析"。**以下真机实测把它证伪。**
+
+## C. 证伪现场（真机 root，2026-10-09）
+
+设备：Redmi Note 13 5G，`su` = `uid=0(root) ... context=u:r:magisk:s0`
+
+```
+# 进程与 uid
+adb -s fmvwkrheonugvgjb shell 'su -c "ps -A -o PID,USER,NAME | grep -iE \"zygote|checker|system_server\""'
+  868 root         zygote64
+  870 root         zygote
+ 1701 system       system_server
+ 2292 webview_zygote webview_zygote
+27625 u0_a299      dev.checker
+
+adb -s fmvwkrheonugvgjb shell "pm list packages -U | grep -i checker"
+package:dev.checker uid:10299
+
+# 被测 App 的父进程就是 zygote64
+adb -s fmvwkrheonugvgjb shell 'su -c "ps -o PID,PPID,USER,NAME -p 27625"'
+  PID  PPID USER         NAME
+27625   868 u0_a299      dev.checker
+```
+
+vendor .so 条数（`awk '{print $6}' <maps> | grep -E '^/(vendor|odm|vendor_dlkm)/' | grep '\.so$' | sort -u`）：
+
+```
+init      (pid 1)     :   0      ← 关键：zygote 不是从 init 继承
+zygote64  (pid 868)   :  56      ← 关键：zygote 自己 mmap 了整套 MTK/MEOW 图形栈
+dev.checker(pid 27625):  59
+com.android.settings (pid 11089, 从不跑 GL):  56
+```
+
+集合运算（Z=zygote64，A=dev.checker）：
+
+```
+=== A \ Z  仅 App 进程有（= 运行时 dlopen 的）===
+/vendor/lib64/arm.graphics-V5-ndk.so
+/vendor/lib64/hw/mapper.mediatek.so
+/vendor/lib64/libdrm.so
+=== Z \ A  仅 zygote 有 ===
+(空)
+=== 交集条数 ===
+56
+```
+
+从不跑 GL 的 settings 与 zygote64 的关系：
+
+```
+=== settings 与 zygote64 的差集（settings \ zygote64）===
+(空)
+=== settings 与 zygote64 交集条数 ===
+56
+```
+
+⇒ **56/59 是 zygote 预加载后被 fork 继承，与"App 自己 dlopen"无关；只有 3 条是 App 自加载。**
+⇒ §14 v1 的 uid 判定（`current_fsuid() >= 10000`，作用域在进程路径解析时）对那 56 条**不生效**。
+
+## D. 结论
+
+失败点不在"闸门阈值写错"，而在**闸门作用的位置错了**：路径是被 zygote（uid 0）在 fork 前
+解析的，App 进程无论 uid 多少都不会重解析继承来的映射。

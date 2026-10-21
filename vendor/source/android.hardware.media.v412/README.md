@@ -4,7 +4,7 @@
 > `hal/android15/android.hardware.media.v412/build.py`（设备无关规范线，业务源码随引擎固化，
 > framework 稳定类型 HardwareBuffer/Surface/LayerMetadataKey vendored）；构建期依赖
 > （AIDL 版本包 / AOSP 平台源 / hidl-gen / libyuv）走共享
-> `hal/android15/build/deps.py media-v412`。**本机型只是集成层**：从 gold 自己 lineage super
+> `hal/android15/build/deps.py media-v412`。**本机型只是集成层**：从 note13 自己 lineage super
 > 研磨链接期/运行期 ABI 库传给引擎，再 install 产物、落运行期库、写 rc/vintf/seccomp/
 > media_codecs 并登记 SELinux baselines。
 
@@ -41,7 +41,7 @@
 ## 2. 机型集成层职责（本 build.py）
 
 薄集成，代码逻辑委托 hal 引擎。机型独有的四件事：
-1. **研磨链接期 ABI 库**（`prepare_abi`）：全部来自 gold 自己的 lineage-22.0 super
+1. **研磨链接期 ABI 库**（`prepare_abi`）：全部来自 note13 自己的 lineage-22.0 super
    （禁止借用 pixel6）——system 侧 `super/system_a.img /system/lib64`、swcodec APEX 侧
    `super/swcodec-work/apex_payload.img /lib64`，debugfs dump 到
    `out/runtime_lib_dir/media-v412/{system,apex}/lib64`（与其它 HAL 共用的

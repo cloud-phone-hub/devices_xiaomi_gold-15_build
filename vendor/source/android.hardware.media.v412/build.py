@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""xiaomi gold（Redmi Note 13 5G, android15）—— V4L2 Codec2 真实硬件编解码 store 设备集成层。
+"""xiaomi note13（Redmi Note 13 5G, android15）—— V4L2 Codec2 真实硬件编解码 store 设备集成层。
 
 代码逻辑（codegen + 编译 + 链接整套 v4l2_codec2）委托
 `hal/android15/android.hardware.media.v412/build.py` 的 `build(out_dir, abi_dirs, dry_run)`。
-gold 只做设备集成层独有的事：
+note13 只做设备集成层独有的事：
   1. **从 lineage super 研磨**链接期/运行期 ABI 库（debugfs dump system_a.img +
      swcodec apex_payload.img），得 [system_lib64, apex_lib64] 两目录传给引擎；
   2. 把引擎产出的两服务二进制 + libc2plugin_store.so 拷进 /vendor staging；
@@ -13,7 +13,7 @@ gold 只做设备集成层独有的事：
      c2.v4l2.* 组、保留 MTK 全集，绝不覆盖）；
   5. 登记 SELinux baselines。
 
-服务注册 android.hardware.media.c2.IComponentStore/default（gold 的 MTK 假 store 已在
+服务注册 android.hardware.media.c2.IComponentStore/default（note13 的 MTK 假 store 已在
 android.hardware.media 让位至 default1，见其 cdh_media.cfg/manifest，二者实例不冲突）。
 vintf manifest 仅本模块注入 IComponentStore/default（android.hardware.media 那份已改
 default1，不重复声明 default）。
@@ -27,7 +27,7 @@ default1，不重复声明 default）。
   etc/vintf/manifest/android.hardware.media.c2@1.2-service-v4l2.xml
   etc/media_codecs_c2.xml（合并）
 
-用法（在设备根 devices/xiaomi/gold-15 执行；前置：hal deps media-v412 就绪）：
+用法（在设备根 devices/xiaomi/note13-5G-15 执行；前置：hal deps media-v412 就绪）：
   python3 build/vendor/source/android.hardware.media.v412/build.py
   python3 build/vendor/source/android.hardware.media.v412/build.py --dry-run
 """
@@ -67,11 +67,6 @@ def _load_by_path(name, path):
 
 
 hal_v412 = _load_by_path("cdh_hal_media_v412_engine", _HAL_ENGINE)
-
-# 设备共享 deps.py（RUNTIME_LIB_ROOT 属主）：研磨后复用其统一写 runtime_lib_dir/README.md
-# 来源说明（按路径加载避免与 hal deps 同名冲突，同 camera）。
-device_deps = _load_by_path(
-    "cdh_device_deps", os.path.join(_DEVICE_ROOT, "build", "vendor", "build", "deps.py"))
 
 ENGINE_OUT_DIR = os.path.join(OUT_DIR, "vendor")
 
@@ -208,8 +203,7 @@ def _dump_img_into(img, img_path, dst, dry_run=False):
 
 
 def prepare_abi(dry_run=False):
-    """研磨链接期 ABI 库到 out/runtime_lib_dir/media-v412/，并刷新 runtime_lib_dir 来源
-    README（复用共享 deps 写手），返回两目录。"""
+    """研磨链接期 ABI 库到 out/runtime_lib_dir/media-v412/，返回两目录。"""
     os.makedirs(ABI_SYS, exist_ok=True)
     os.makedirs(ABI_APEX, exist_ok=True)
     for name in SYSTEM_DUMP_LIBS:
@@ -218,7 +212,6 @@ def prepare_abi(dry_run=False):
     for name in APEX_LIBS:
         _dump_img_into(SWCODEC_IMG, f"/lib64/{name}",
                        os.path.join(ABI_APEX, name), dry_run=dry_run)
-    device_deps.write_runtime_lib_readme(dry_run=dry_run)
     return [ABI_SYS, ABI_APEX]
 
 
@@ -383,7 +376,7 @@ def build(dry_run=False):
 
     print(f"==> 委托 hal 引擎：codegen + 编译 + 链接（out={ENGINE_OUT_DIR}, "
           f"abi={abi}）")
-    hal_v412.build(ENGINE_OUT_DIR, abi, dry_run=dry_run)
+    hal_v412.build(ENGINE_OUT_DIR, abi, tmp_dir=OUT_DIR, dry_run=dry_run)
 
     print("==> 安装引擎产物到 /vendor staging")
     install_engine(dry_run=dry_run)
@@ -406,13 +399,13 @@ def build(dry_run=False):
     print("==> SELinux 标签登记")
     register_labels(baselines_file(), dry_run=dry_run)
 
-    print("[ok] gold media-v412(v4l2 codec2) 集成完成（委托 hal 引擎 + gold 配置）")
+    print("[ok] note13 media-v412(v4l2 codec2) 集成完成（委托 hal 引擎 + note13 配置）")
     return 0
 
 
 def main():
     ap = argparse.ArgumentParser(
-        description="xiaomi gold V4L2 Codec2 store 设备集成层（委托 hal 引擎构建）")
+        description="xiaomi note13 V4L2 Codec2 store 设备集成层（委托 hal 引擎构建）")
     ap.add_argument("--dry-run", action="store_true", help="只打印不执行")
     args = ap.parse_args()
     sys.exit(build(dry_run=args.dry_run))

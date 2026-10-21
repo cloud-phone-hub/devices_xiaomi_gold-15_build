@@ -1,130 +1,216 @@
 #!/usr/bin/env python3
-"""gold-15 vendor.img 重打包编排（由 build-vendor.py 薄入口调用）。
+"""note13-5G-15 vendor.img 重打包编排（由 build-vendor.py 薄入口调用）。
 
-基座 = **官方（厂商）vendor_a.img**（EROFS），不是 lineage 基座。本文件只做编排与
-容器脚本拼装，具体逻辑各自独立成模块：
+参考 pioneer-phone 的 patch_vendor.sh + 00_egl_props.sh：
+  1. 用 lineage 底包 vendor_a.img 作基座（virtio 内核匹配，真机厂商 vendor 是
+     MTK 内核模块/驱动，不可直接用于 virtio 云主机）；
+  2. 一次 debugfs 会话完成注入树（inject）+ build.prop 渲染修正（props）；
+  3. e2fsck -fy 重打包，产物输出 out/dist/rom/vendor.img。
 
-  base_fs.py   官方 EROFS → ext4 基座转换（容器内 root 双挂载 cp -a，保
-               uid/gid/mode + security.selinux；宿主与容器 overlay 都保不住标签）
-  inject.py    build/vendor/patch/ 注入（uid/gid 0:0、mode 0644、baselines 标签回填）
-  remove.py    按 build/vendor/remove.txt 删除官方 vendor 内不需要的条目（rc 类
-               "定义式"文件只能删不能覆盖）
-  props.py     改写官方 vendor 内 prop 文件（如 /odm/etc/build.prop 的 abilist32，
-               官方声明 32+64 而云机是 arm64-only）
-  fstab.py     把官方 /etc/fstab.mt6833 云机化后就地覆盖（二阶段 mount_all 读它；
-               规则来自 build/scripts/fstab_cloud.py，与 boot ramdisk 那份同口径）
-
-产物 out/dist/rom/vendor.img。
-
-⚠️ 注入面：`build/vendor/source/**`（CDH HAL 子项目）由 source_build 编译落盘
-`out/dist/vendor`，与 `build/vendor/patch/` 一并注入（inject.py 两棵树）；Remote
-KeyMint 的 sepolicy 段由 sepolicy.py 追加到 vendor_sepolicy.cil + vendor_file_contexts。
-当前已移植 keymint 一个子项目，其余 HAL 待后续。
-
-⚠️ 体积：官方 vendor 未压缩内容 ~1.95 GiB，ext4 后 ~2.2 GiB > 官方 super 给
-vendor_a 的 1.28 GiB → 落地必须走「重建 super 并放大 vendor 分区」（super 内部余量
-1.54 GiB 足够）。
-
-注：ext4 必然自带 /lost+found（e2fsck 缺它会重建，删不掉），官方 erofs 的 /vendor
-没有该条目——一处已知形态差异。
+分层（参考 pixel6-15 system/build）：debugfs 工具层 + props/selinux/inject
+规则模块；本模块仅编排流程。入口 build-vendor.py 仅做参数解析后委托
+build_vendor(dry_run=...)。
 """
 
+import math
 import os
-import subprocess
+import re
+import shutil
 import sys
 
-import base_fs
+from buildenv import (
+    LINEAGE_SUPER_DIR, ROM_DIST, TMP_DIR, VENDOR_DIST, VENDOR_PATCH_DIR,
+    VENDOR_STAGE_DIR, e2fs_tools,
+)
+from debugfs import DEBUGFS, E2FSCK, cat, run, run_command_file
 import deps
 import fstab
+import gold_props
+import gold_selinux
 import inject
 import props
-import remove
+import prune
 import sepolicy
 import source_build
-import ueventd
-from buildenv import (ROM_DIST, ROM_ROOT_DIR, TMP_DIR, VENDOR_DIST,
-                      VENDOR_PATCH_DIR)
 
-# 官方（厂商）vendor 逻辑分区（EROFS）
-VENDOR_OFFICIAL = os.path.join(ROM_ROOT_DIR, "vendor_a.img")
+RESIZE2FS = e2fs_tools()[2]
+
+# lineage 底包 vendor 逻辑分区（virtio 内核匹配）作基座
+VENDOR_BASE = os.path.join(LINEAGE_SUPER_DIR, "vendor_a.img")
 
 WORK_DIR = os.path.join(TMP_DIR, "vendor")
 
-# 容器：Linux root + erofs-utils + e2fsprogs（本仓库 builder 镜像已含）
-CONTAINER_IMAGE = os.environ.get("CDH_VENDOR_BUILDER",
-                                 "cloud-phone-hub-ubuntu-builder:latest")
+# ueventd 视频节点规则：v4l2 HAL（android.hardware.media.v412）以 media 用户运行，
+# 而内核 cdh_media.ko（virtio-media 驱动）创建的 /dev/video* 默认 0600 root:root，
+# DAC 直接拒绝 open（早于 SELinux）。对齐 pixel6-15 samsung 链路：属主 media:camera。
+# /dev/video* 必须允许 media 组读写，否则 enumerateSupportedPixelformats 全空、
+# V4L2Decoder open("/dev/video0") 返回 EACCES（实测 errno=13）。
+UEVENTD_VIDEO_RULE = "/dev/video*          0660    media   camera"
+UEVENTD_VIDEO_MARKER = b"# cdh note13: virtio-media v4l2 video nodes"
+UEVENTD_VIDEO_LABEL = "u:object_r:vendor_configs_file:s0"
 
+
+def ueventd_video_cmds(work_img, tmp_dir=None):
+    """读回 /etc/ueventd.rc，追加 /dev/video* 规则（幂等），返回 debugfs 命令。
+
+    与 fstab 同机制：基于工作镜像的「原始」内容拼接，命令序里只有最后一次 write
+    生效——本函数须在 sepolicy 链之后、props 链之前调用（互不冲突，均独立文件）。
+    """
+    tmp_dir = tmp_dir or os.path.join(TMP_DIR, "vendor")
+    os.makedirs(tmp_dir, exist_ok=True)
+    img = "/etc/ueventd.rc"
+    data = cat(work_img, img)
+    if data is None:
+        print(f"[warn] 镜像内缺 {img}，跳过 video 节点授权")
+        return []
+    if UEVENTD_VIDEO_MARKER in data:
+        print("[ok] ueventd.rc 已含 video 节点规则，跳过")
+        return []
+    rule = (b"\n# " + UEVENTD_VIDEO_MARKER + b"\n" +
+            UEVENTD_VIDEO_RULE.encode() + b"\n")
+    tmp = os.path.join(tmp_dir, "ueventd.rc")
+    with open(tmp, "wb") as f:
+        f.write(data + rule)
+    print("[ok] ueventd.rc 追加视频节点规则（media:camera 0660，幂等）")
+    return [
+        f"rm {img}",
+        f"write {tmp} {img}",
+        f"sif {img} mode 0x81a4",
+        f"ea_set {img} security.selinux {UEVENTD_VIDEO_LABEL}",
+    ]
+
+
+def _estimate_new_inodes():
+    """统计注入树将占用的新 inode 数（文件 + 子目录，保守计）。"""
+    n = 0
+    for tree in (VENDOR_PATCH_DIR, VENDOR_STAGE_DIR):
+        if not os.path.isdir(tree):
+            continue
+        for root, dirs, files in os.walk(tree):
+            n += len(dirs) + len(files)
+    return n
+
+
+def _ensure_vendor_capacity(work_img, needed_inodes):
+    """扩展 vendor 工作镜像，保证注入可用 inode/块。
+
+    lineage 基座空闲 inode 极少（实测 29），而 ext4 的 inode 只随新增 block
+    group 增长；注入内容多（如 audio HAL 全家桶 ~55 inode）时 write 会报
+    "Could not allocate inode in ext2 filesystem"。按整组补足（+272 inode/组）。
+    """
+    res = run([DEBUGFS, "-R", "stats", work_img], capture_output=True, text=True)
+    out = res.stdout
+
+    def _int(key):
+        m = re.search(rf"^{re.escape(key)}:\s+(\d+)", out, re.M)
+        return int(m.group(1)) if m else 0
+
+    free_inodes = _int("Free inodes")
+    free_blocks = _int("Free blocks")
+    block_size = _int("Block size") or 4096
+    ipg = _int("Inodes per group") or 1
+    bpg = _int("Blocks per group")
+    blocks = _int("Block count")
+
+    inode_groups = math.ceil(max(0, needed_inodes - free_inodes) / ipg)
+    if inode_groups == 0:
+        return
+    new_blocks = blocks + inode_groups * bpg
+    print(f"[..] vendor inode 不足（空闲 {free_inodes} < 需 {needed_inodes}），"
+          f"resize2fs +{inode_groups} 组 -> {new_blocks} 块（空闲块 {free_blocks}）")
+    with open(work_img, "rb+") as f:
+        f.truncate(new_blocks * block_size)
+    res2 = run([RESIZE2FS, work_img], capture_output=True, text=True)
+    if res2.returncode not in (0, 1):
+        print(res2.stderr)
+        sys.exit(1)
 
 def build_vendor(dry_run=False):
-    if not os.path.isfile(VENDOR_OFFICIAL):
-        print(f"[err] 官方 vendor 缺失: {VENDOR_OFFICIAL}（先 unpack）")
+    if not os.path.isfile(VENDOR_BASE):
+        print(f"[err] 基座 vendor_a.img 缺失: {VENDOR_BASE}（先 unpack lineage）")
         sys.exit(1)
     if not os.path.isdir(VENDOR_PATCH_DIR):
         print(f"[err] 注入树缺失: {VENDOR_PATCH_DIR}")
         sys.exit(1)
 
-    # 0) 编译依赖准备 + source 子构建（keymint HAL 等）：先编译落盘 out/dist/vendor，
-    #    随后与 patch 树一并注入。deps 从**官方 gold images**（vendor_a/system_a，
-    #    EROFS）研磨链接期运行库。
+    # 0) 编译依赖准备（source 子构建前置）：keymint 等链接期运行库由
+    #    note13 lineage-22.0 super 组装（deps.py），就绪后才进入子构建。
     deps.prepare_runtime_libs(dry_run=dry_run)
+
+    # 0b) 优先编译 source 子模块（daemon 等），产物就绪后再进入镜像重打包
     source_build.run_source_builds(dry_run=dry_run)
 
-    content = base_fs.content_bytes(VENDOR_OFFICIAL)
-    size = base_fs.mirror_size(content)
-    files = inject.patch_files()
-    labels = inject.labels()
-    lack = inject.missing(files, labels)
-    removals = remove.paths()
-    print(f"[vendor] 基座 = 官方 vendor_a.img（EROFS）: {VENDOR_OFFICIAL}")
-    print(f"[vendor] 未压缩内容 {content} B；ext4 镜像 {size} B"
-          f"（含注入预留 {base_fs.MIRROR_SLACK} B）；注入树 {len(files)} 个文件；"
-          f"删除清单 {len(removals)} 条")
-    print(f"[vendor] baselines 标签 {len(labels)} 条；覆盖注入树 "
-          f"{len(files) - len(lack)}/{len(files)}")
-    if lack:
-        print("[err] baselines vendor.selinux-labels 缺以下键:")
-        for f in lack:
-            print("   ", f)
-        sys.exit(1)
+    os.makedirs(WORK_DIR, exist_ok=True)
+    work_img = os.path.join(WORK_DIR, "vendor.work.img")
+    if not dry_run:
+        shutil.copy2(VENDOR_BASE, work_img)
+    print(f"[ok] 基座副本: {VENDOR_BASE} -> {work_img}")
 
+    # 注入前按注入树占用量扩展 inode/块（lineage 基座空闲 inode 极少；
+    # gold /etc/selinux 替换件中镜像内不存在的新文件也占 inode）
+    if not dry_run:
+        _ensure_vendor_capacity(work_img,
+                                _estimate_new_inodes() + gold_selinux.file_count())
+    else:
+        print(f"[..] (dry) 将校验 vendor inode 容量（注入树需 ~{_estimate_new_inodes()} inode）")
+
+    # 注入树 + build.prop 渲染修正（一次 debugfs 会话）
     if dry_run:
-        print(f"[..] (dry) 容器 {CONTAINER_IMAGE}：" + base_fs.prepare(size).strip()
-              .replace("\n", " | "))
-        print(f"       {remove.script().strip()}（删除 {len(removals)} 条）")
-        print(f"       {inject.script().strip()}（注入 {len(files)} 文件）")
-        print(f"       {sepolicy.script().strip()}"
-              f"（追加 keymint sepolicy 段：vendor_sepolicy.cil + vendor_file_contexts）")
-        print(f"       {ueventd.script().strip()}"
-              f"（追加 /dev/hvc* ueventd 授权）")
-        print(f"       {props.script().strip()}"
-              f"（改写 /vendor/{props.TARGET} 的 {len(props.SETS)} 个属性）")
-        print(f"       cp <云机派生 fstab> -> /vendor{fstab.FSTAB_IN_VENDOR}"
-              f"（二阶段 mount_all 读它）")
-        print(f"       {base_fs.finish(os.path.basename(VENDOR_DIST)).strip()}"
-              .replace("\n", " | "))
-        return 0
+        print(f"[..] (dry) gold /etc/selinux 替换开关={gold_selinux.ENABLED}；"
+              f"将注入 vendor/patch 注入树并改 build.prop")
+    else:
+        # 官方 gold /etc/selinux 替换先真实落盘（单独一次 debugfs 会话）：sepolicy
+        # 链在收集命令阶段读取镜像「当前」内容（同会话命令尚未执行）；若与它们
+        # 同批，CDH CIL 段会叠在 lineage 策略上并成为最终写入者，替换被覆盖丢弃。
+        # 默认关闭（CDH_GOLD_SELINUX=1 启用）：实测 gold 策略与本平台不兼容，
+        # 启用后 boot 不完成（见 gold_selinux 模块「实测结论」）。
+        if gold_selinux.ENABLED:
+            if not run_command_file(work_img,
+                                    gold_selinux.replace_cmds(work_img), WORK_DIR):
+                print("[err] 官方 gold /etc/selinux 替换失败")
+                sys.exit(1)
+        else:
+            print("[..] 跳过官方 gold /etc/selinux 替换（CDH_GOLD_SELINUX=1 可启用）")
+        # vendor 属性上下文对齐真机（/dev/__properties__ 类型命名空间）：同样必须先
+        # 真实落盘——sepolicy 链读镜像当前内容后统一追加（keymint 段会再补一条规则）。
+        if not run_command_file(work_img, gold_props.prop_ctx_cmds(work_img), WORK_DIR):
+            print("[err] 官方 vendor_property_contexts 对齐失败")
+            sys.exit(1)
+        cmds = inject.inject_cmds(work_img)
+        cmds += prune.prune_cmds(work_img)
+        cmds += sepolicy.patch_commands(work_img, WORK_DIR)
+        cmds += sepolicy.audio_hal_patch_commands(work_img, WORK_DIR)
+        cmds += sepolicy.keymint_hal_patch_commands(work_img, WORK_DIR)
+        cmds += sepolicy.radio_hal_patch_commands(work_img, WORK_DIR)
+        cmds += sepolicy.sensors_hal_patch_commands(work_img, WORK_DIR)
+        cmds += sepolicy.thermal_hal_patch_commands(work_img, WORK_DIR)
+        cmds += sepolicy.vibrator_hal_patch_commands(work_img, WORK_DIR)
+        cmds += sepolicy.lights_hal_patch_commands(work_img, WORK_DIR)
+        cmds += sepolicy.gnss_hal_patch_commands(work_img, WORK_DIR)
+        cmds += sepolicy.media_hal_patch_commands(work_img, WORK_DIR)
+        cmds += sepolicy.wifi_hal_patch_commands(work_img, WORK_DIR)
+        cmds += fstab.fstab_cmds(work_img)
+        cmds += ueventd_video_cmds(work_img, WORK_DIR)
+        bp_host = props.host_content(work_img, WORK_DIR)
+        cmds += props.prop_cmds(work_img, bp_host)
+        if not run_command_file(work_img, cmds, WORK_DIR):
+            print("[err] debugfs 注入失败")
+            sys.exit(1)
+        print("[ok] debugfs 注入完成")
 
-    inject.write_workspace(WORK_DIR, labels)
-    sepolicy.write_workspace(WORK_DIR)
-    ueventd.write_workspace(WORK_DIR)
-    props.write_workspace(WORK_DIR)
-    fstab_script = fstab.generate(VENDOR_OFFICIAL, WORK_DIR)
+    # e2fsck 修复（rc 1 = 已修复，视为成功）
+    if not dry_run:
+        res = run([E2FSCK, "-fy", work_img], capture_output=True)
+        if res.returncode not in (0, 1):
+            print(res.stderr.decode("utf8", "replace"))
+            print(f"[err] e2fsck 失败: {res.returncode}")
+            sys.exit(1)
+        print("[ok] e2fsck 通过")
+
     os.makedirs(ROM_DIST, exist_ok=True)
-    if os.path.exists(VENDOR_DIST):
-        os.remove(VENDOR_DIST)
-
-    script = (base_fs.prepare(size) + remove.script() + inject.script()
-              + sepolicy.script() + ueventd.script() + props.script() + fstab_script
-              + base_fs.finish(os.path.basename(VENDOR_DIST)))
-    mounts = (base_fs.mounts(VENDOR_OFFICIAL, ROM_DIST)
-              + inject.mounts(WORK_DIR))
-    cmd = ["docker", "run", "--rm", "-i", "--privileged"]
-    for host, cont, ro in mounts:
-        cmd += ["-v", f"{host}:{cont}:{'ro' if ro else 'rw'}"]
-    cmd += [CONTAINER_IMAGE, "bash", "-s"]
-    if subprocess.run(cmd, input=script.encode()).returncode != 0:
-        print("[err] vendor 重打包失败")
-        sys.exit(1)
-
-    print(f"[ok] vendor.img -> {VENDOR_DIST}（{os.path.getsize(VENDOR_DIST)} B）")
+    if not dry_run:
+        shutil.copy2(work_img, VENDOR_DIST)
+    print(f"[ok] vendor.img -> {VENDOR_DIST}")
     return 0
+
+

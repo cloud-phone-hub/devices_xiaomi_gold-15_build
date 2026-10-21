@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""组装 gold-15 最终盘集 vda.img + data.qcow2。
+"""组装 note13-5G-15 最终盘集 vda.img + data.qcow2。
 
 参考 pioneer-phone recipe/repack.sh 的 assemble_vda 路线：
   1. 从 lineage 底包（UTM 虚机）提取 vda.qcow2 -> raw，作为引导盘（GPT + preloader/lk +
@@ -7,11 +7,10 @@
   2. 拷贝引导盘到目标目录产物 vda.img，并以官方 super.img（pack_super 注入 vendor/
      vendor_dlkm 后的 SUPER_DIST）GPT 原位替换其 super 分区（官方 9.1GB <= 底包 12.8GB
      分区，原地写入）；
-  3. 生成 data.qcow2 稀疏种子（daemon 以可写 overlay 叠于其上）。
-  4. 空分区预格式化：vda 内 metadata -> ext4（容量按 GPT），data -> f2fs（见 blankfmt.py）。
+  3. 生成空 data.qcow2 稀疏种子（daemon 以可写 overlay 叠于其上）。
 
 目标目录（VERSION_DIR，daemon 运行盘集）：
-  /Volumes/work/cloud-phone-hub/out/device/gold-15/15/os3.0.5.0.vnqmixm/{vda.img,data.qcow2}
+  /Volumes/work/cloud-phone-hub/out/device/note13-5g/15/os3.0.9.0.vnqcnxm/{vda.img,data.qcow2}
 
 用法：
   python3 build/scripts/pack-roms.py
@@ -34,7 +33,6 @@ from buildenv import (  # noqa: E402
     VENDOR_BOOT_DIST, VERSION_DATA, VERSION_DIR, VERSION_VDA,
 )
 from buildenv import _qemu_img  # noqa: E402
-import blankfmt  # noqa: E402
 import lpmemeta  # noqa: E402
 
 # super 内逻辑分区（无槽位名），供 --list-partitions 遍历展示
@@ -144,12 +142,12 @@ GRUB_TIMEOUT_ANCHOR = "load_env -f ${partition_persist}/grubenv android_theme gr
 # Remote KeyMint verified boot 参数注入：guest keymint HAL（cuttlefish remote）
 # 读 ro.boot.vbmeta.digest / device_state / verifiedbootstate（源自 androidboot.*
 # cmdline），host secure_env 以 device.go Note135G15.FactoryTEEVerifiedBootHash 校验，
-# 两端不一致时 guest HAL 停在 initialize。gold lineage 底包无 AVB 绑定，直接注入
+# 两端不一致时 guest HAL 停在 initialize。note13 lineage 底包无 AVB 绑定，直接注入
 # 固定值（与 pixel6 同款）即可。锚点 export kernel_cmdline_dynamic 全文件唯一。
 GRUB_VBMETA_MARKER = "# CDH: Remote KeyMint verified boot 参数"
 GRUB_VBMETA_ANCHOR = "\texport kernel_cmdline_dynamic"
 GRUB_VBMETA_PATCH = """\t# CDH: Remote KeyMint verified boot 参数（与 device.go FactoryTEEVerifiedBootHash 一致）
-\tset kernel_cmdline_dynamic="${kernel_cmdline_dynamic} androidboot.vbmeta.digest=fe049d35e450d9faf4b26788864f7b5fd5b857276d5271b067ef0e0268acff6f androidboot.vbmeta.device_state=locked androidboot.verifiedbootstate=green androidboot.selinux=permissive"
+\tset kernel_cmdline_dynamic="${kernel_cmdline_dynamic} androidboot.vbmeta.digest=fe049d35e450d9faf4b26788864f7b5fd5b857276d5271b067ef0e0268acff6f androidboot.vbmeta.device_state=locked androidboot.verifiedbootstate=green"
 """
 
 
@@ -229,7 +227,10 @@ def patch_efi_grub_slot_a(vda_path):
 # 元数据表——两者都不覆盖分区数据本身。只要新镜像 ≤ 已分配容量，直接把数据写到对应
 # 字节偏移即可，无需重算校验和、无需重建 super/vda。物理分区（super/boot/…）偏移取自
 # GPT；逻辑分区（vendor/system/…）先在 GPT 定位 super、再读 super 内 liblp extent 定位。
-# 预留冗余在 pack_super.py 的 SUPER_RESERVE 声明。详见 skills/build-device/SKILL.md。
+# 注：gold-15 现走「官方 super 零改动」路线，super 内逻辑分区容量由官方 liblp 固定，
+# 无法像旧版 pack_super_v1（lpmake 全量重建，已删除）那样预留冗余扩容；逻辑分区
+# 超出容量时只能改回全量重建路线（旧脚本备份见 .backup/gold-build-*/build/scripts/）。
+# 详见 skills/build-device/SKILL.md。
 
 
 def _read_gpt(vda_path):
@@ -322,7 +323,8 @@ def patch_partition(vda_path, name, image_path, dry_run=False):
         over = new_size - capacity
         print(f"[err] 新镜像超出已分配容量 {over} B。")
         if kind == "logical":
-            print(f"      提高 pack_super.py SUPER_RESERVE['{name}'] 后重跑 super+pack 全量重建。")
+            print(f"      官方 super 零改动路线下逻辑分区容量固定，无法扩容；"
+                  f"需改回 lpmake 全量重建（旧脚本备份见 .backup/gold-build-*/build/scripts/）。")
         else:
             print(f"      物理分区容量由 GPT 布局固定，需重建 vda。")
         return 1
@@ -364,36 +366,21 @@ def _ensure_vda_raw():
 
 
 def _make_data_qcow2(force, dry_run):
-    """生成 /data 稀疏种子——**已预格式化 f2fs**（见 blankfmt.py 的取证说明）。"""
     if os.path.isfile(VERSION_DATA) and not force:
         print(f"[ok] data.qcow2 已就位（跳过）: {os.path.getsize(VERSION_DATA)} B")
         return
     if dry_run:
-        print(f"[..] (dry) 将生成已预格式化（f2fs）的 data.qcow2：{DATA_VIRT_BYTES} B")
+        print(f"[..] (dry) 将生成 data.qcow2（{DATA_VIRT_BYTES} B 稀疏）")
         return
-    blankfmt.data_f2fs_qcow2(VERSION_DATA, DATA_VIRT_BYTES)
-    print(f"[ok] data.qcow2（f2fs 预格式化）-> {VERSION_DATA}"
-          f"（{os.path.getsize(VERSION_DATA)} B）")
-
-
-def _preformat_metadata(vda_path, dry_run=False):
-    """把 vda 内 /metadata 分区预格式化为 ext4（空分区运行期 format 会被 SELinux 拒）。
-
-    复用已有 GPT 定位与原地写入（patch_partition）：容量校验天然生效。
-    """
-    loc = _locate_partition(vda_path, "metadata")
-    if loc is None:
-        print("[warn] vda 内无 metadata 分区，跳过预格式化")
-        return
-    _offset, capacity, _kind = loc
-    if dry_run:
-        print(f"[..] (dry) 将把 metadata 分区（{capacity} B）预格式化为 ext4")
-        return
-    img = os.path.join(WORK_DIR, "metadata.ext4.img")
-    blankfmt.metadata_ext4(img, capacity)
-    if patch_partition(vda_path, "metadata", img) != 0:
+    qemu_img = _qemu_img()
+    cmd = [qemu_img, "create", "-f", "qcow2",
+           "-o", "compat=1.1,cluster_size=65536",
+           VERSION_DATA, str(DATA_VIRT_BYTES)]
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    if res.returncode != 0:
+        print(f"[err] qemu-img 创建失败: {res.stderr.strip()}")
         sys.exit(1)
-    os.remove(img)
+    print(f"[ok] data.qcow2: {os.path.getsize(VERSION_DATA)} B")
 
 
 def pack(force=False, dry_run=False):
@@ -403,7 +390,6 @@ def pack(force=False, dry_run=False):
     vda_src = _ensure_vda_raw() if not dry_run else None
     if dry_run:
         print(f"[..] (dry) 将拷贝底包 vda.raw -> {VERSION_VDA} 并 GPT 替换 super（{SUPER_DIST}）")
-        _preformat_metadata(VERSION_VDA, dry_run=True)
         _make_data_qcow2(force, dry_run)
         return 0
     if not os.path.isfile(SUPER_DIST):
@@ -448,17 +434,13 @@ def pack(force=False, dry_run=False):
     else:
         print(f"[warn] 缺 patch.img: {PATCH_DIST}（先 build-patch），vdc 将不挂载 /mnt")
 
-    # 3) 空分区预格式化：/metadata(ext4) 与 /data(f2fs)
-    #    云机盘集是全新的，运行期 format 会被 e2fs 域的 SELinux 拒（见 blankfmt.py）。
-    _preformat_metadata(VERSION_VDA)
-
-    # 4) data.qcow2 稀疏种子（已预格式化 f2fs）
+    # 2) data.qcow2 稀疏种子
     _make_data_qcow2(force, dry_run)
     return 0
 
 
 def main():
-    ap = argparse.ArgumentParser(description="gold-15 盘集打包 vda+data")
+    ap = argparse.ArgumentParser(description="note13-5G-15 盘集打包 vda+data")
     ap.add_argument("--force", action="store_true", help="目标已存在时强制重建")
     ap.add_argument("--dry-run", action="store_true", help="只打印不执行")
     ap.add_argument("--patch", metavar="NAME=IMAGE", action="append", default=[],
