@@ -1,0 +1,14 @@
+<manifest version="1.0" type="device">
+  <!-- gold（Redmi Note 13 5G, android15）自研蓝牙 HCI HAL（虚拟 HAL）。
+       本片段**覆盖** lineage 底座自带的同名 bluetooth-service-default.xml（AOSP default
+       参考声明，指向底座里并不存在的 bluetooth-service-default 二进制）。若改用别的
+       文件名追加，vendor VINTF 会同时出现两条 IBluetoothHci/default 声明，
+       servicemanager 解析失败（Conflicting FqInstance），整份 device manifest 不可用。
+       覆盖后由本服务提供 android.hardware.bluetooth.IBluetoothHci/default（v1 冻结），
+       framework Fluoride 栈据此取得 HCI 通道，扫描/连接逻辑仍在其上运行。 -->
+  <hal format="aidl">
+    <name>android.hardware.bluetooth</name>
+    <version>1</version>
+    <fqname>IBluetoothHci/default</fqname>
+  </hal>
+</manifest>

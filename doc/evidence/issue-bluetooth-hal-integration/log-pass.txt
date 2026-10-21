@@ -1,0 +1,39 @@
+# 蓝牙 HCI HAL 设备集成 —— 验证通过日志（2026-10-21 20:08:12）
+
+## 1. 语法校验
+[ok] sepolicy + vendor_builder + 集成层 build.py 语法通过
+
+## 2. 集成层实跑（委托引擎 codegen+编译+链接）
+==> 委托 hal 引擎：codegen + 编译 + 链接（out=/Volumes/work/cloud-phone-hub/devices/xiaomi/gold-15/out/vendor, runtime=['/Volumes/work/cloud-phone-hub/devices/xiaomi/gold-15/out/runtime_lib_dir/vendor-compile-deps/lib64', '/Volumes/work/cloud-phone-hub/devices/xiaomi/gold-15/out/runtime_lib_dir/system-compile-deps/lib64']）
+==> AIDL 代码生成
+    android.hardware.bluetooth (v1, hash f0eb2eb6d3b9)
+==> 编译 3+1 个源文件到 .o
+==> 链接服务二进制
+    写 bin/hw/android.hardware.bluetooth-service
+[ok] bluetooth HAL 构建完成：codegen + 编译 + 链接 -> /Volumes/work/cloud-phone-hub/devices/xiaomi/gold-15/out/vendor/bin/hw
+==> 安装服务二进制到 /vendor staging
+    写 bin/hw/android.hardware.bluetooth-service
+==> rc / vintf
+    写 etc/init/android.hardware.bluetooth-service.rc
+    写 etc/vintf/manifest/android.hardware.bluetooth-service.xml
+==> SELinux 标签登记
+[ok] baselines 登记标签 3 条
+[ok] gold 蓝牙 HCI 集成完成（委托 hal 引擎构建 + gold 配置 + SELinux）
+
+## 3. 产物形态
+out/vendor/bin/hw/android.hardware.bluetooth-service: ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /system/bin/linker64, not stripped
+
+## 4. DT_NEEDED 依赖闭包
+  0x0000000000000001 (NEEDED)          Shared library: [libc++.so]
+  0x0000000000000001 (NEEDED)          Shared library: [libbinder_ndk.so]
+  0x0000000000000001 (NEEDED)          Shared library: [liblog.so]
+  0x0000000000000001 (NEEDED)          Shared library: [libdl.so]
+  0x0000000000000001 (NEEDED)          Shared library: [libm.so]
+  0x0000000000000001 (NEEDED)          Shared library: [libc.so]
+
+## 5. validate_cil(bluetooth_hal_cil)
+[ok] pioneer CIL 校验通过（3 条 allow，平台 106 class、5388 type/attr 声明）
+[ok] bluetooth_hal_cil 通过 validate_cil
+
+## 6. source_build.py 编排发现
+[..] (dry) /opt/homebrew/opt/python@3.14/bin/python3.14 /Volumes/work/cloud-phone-hub/devices/xiaomi/gold-15/build/vendor/source/android.hardware.bluetooth/build.py --dry-run

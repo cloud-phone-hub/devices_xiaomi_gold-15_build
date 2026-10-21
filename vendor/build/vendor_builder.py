@@ -189,6 +189,10 @@ def build_vendor(dry_run=False):
         cmds += sepolicy.gnss_hal_patch_commands(work_img, WORK_DIR)
         cmds += sepolicy.media_hal_patch_commands(work_img, WORK_DIR)
         cmds += sepolicy.wifi_hal_patch_commands(work_img, WORK_DIR)
+        # bluetooth 排在 wifi 之后：成为 vendor_sepolicy.cil / vendor_service_contexts /
+        # vendor_file_contexts 的末次写入者，经聚合器（hal_cil_chain / hal_vsc_missing /
+        # vfc_missing_hal_lines）把前序各段一并写出，不会覆盖 wifi/keymint 标签。
+        cmds += sepolicy.bluetooth_hal_patch_commands(work_img, WORK_DIR)
         cmds += fstab.fstab_cmds(work_img)
         cmds += ueventd_video_cmds(work_img, WORK_DIR)
         bp_host = props.host_content(work_img, WORK_DIR)

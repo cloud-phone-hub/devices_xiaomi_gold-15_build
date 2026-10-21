@@ -1,0 +1,31 @@
+# 修复前（实例 gold-15/7，global 3.0.5.0，rc 不同名 → 双份同名 service）
+# 来源：out/core/stage/runtime/gold-15/7/qemu.log
+
+# --- 1) init 报重名，后解析者被丢弃 ---
+[    0.532730][    T1] init: Parsing file /vendor/etc/init/android.hardware.bluetooth-service.rc...
+[    0.538753][    T1] init: Parsing file /vendor/etc/init/bluetooth-service-default.rc...
+[    0.538997][    T1] init: /vendor/etc/init/bluetooth-service-default.rc: 1: ignored duplicate definition of service 'vendor.bluetooth-default'
+
+# --- 2) 我们那份（恰好字母序在前）胜出并启动 ---
+[   24.644076][    T1] init: processing action (post-fs-data) from (/vendor/etc/init/android.hardware.bluetooth-service.rc:20)
+[   24.644437][    T1] init: starting service 'vendor.bluetooth-default'...
+[   24.646343][    T1] init: ... started service 'vendor.bluetooth-default' has pid 474
+
+# --- 3) 底座那份 rc 的定义（patch.img 内 /etc/init/bluetooth-service-default.rc） ---
+service vendor.bluetooth-default /vendor/bin/hw/android.hardware.bluetooth-service.default
+    class hal
+    capabilities BLOCK_SUSPEND NET_ADMIN SYS_NICE
+    user bluetooth
+    group bluetooth
+    task_profiles HighPerformance
+
+# --- 4) 我们那份 rc 的定义（patch.img 内 /etc/init/android.hardware.bluetooth-service.rc） ---
+service vendor.bluetooth-default /vendor/bin/hw/android.hardware.bluetooth-service
+    class hal
+    user bluetooth
+    group bluetooth
+    seclabel u:r:hal_bluetooth_default:s0
+    interface aidl android.hardware.bluetooth.IBluetoothHci/default
+    disabled
+on post-fs-data
+    start vendor.bluetooth-default

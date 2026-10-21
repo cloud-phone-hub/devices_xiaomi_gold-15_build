@@ -3041,7 +3041,10 @@
       "bin/hw/android.hardware.wifi-service": "u:object_r:hal_wifi_default_exec:s0",
       "etc/init/android.hardware.wifi-service.rc": "u:object_r:vendor_configs_file:s0",
       "etc/cfg/cdh_wifi.cfg": "u:object_r:vendor_configs_file:s0",
-      "etc/cfg/cdh_media.cfg": "u:object_r:vendor_configs_file:s0"
+      "etc/cfg/cdh_media.cfg": "u:object_r:vendor_configs_file:s0",
+      "bin/hw/android.hardware.bluetooth-service": "u:object_r:hal_bluetooth_default_exec:s0",
+      "etc/vintf/manifest/bluetooth-service-default.xml": "u:object_r:vendor_configs_file:s0",
+      "etc/init/bluetooth-service-default.rc": "u:object_r:vendor_configs_file:s0"
     },
     "note": "vendor/patch 注入文件的 security.selinux 标签（自官方 gold images dump，原 .xttar 伴生文件已外置至此）。键 = 注入树内相对路径；注入时按此回填，标签缺失即报错退出。"
   },

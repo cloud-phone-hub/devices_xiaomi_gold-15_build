@@ -1,0 +1,10 @@
+# 修复前（实例 gold-15/6，CN 3.0.10.0；VINTF 重复声明）
+# 来源：out/core/stage/runtime/gold-15/6/qemu.log
+[    5.879156][  T189] servicemanager: getDeviceHalManifest: status from fetching VINTF information: -2147483648
+[    5.879158][  T189] servicemanager: getDeviceHalManifest: -2147483648 VINTF parse error: Cannot add manifest fragment /vendor/etc/vintf/manifest/bluetooth-service-default.xml: HAL "android.hardware.bluetooth" has a conflict: Conflicting FqInstance: IBluetoothHci/default (@1) (from /vendor/etc/vintf/manifest/android.hardware.bluetooth-service.xml) vs. IBluetoothHci/default (@1) (from /vendor/etc/vintf/manifest/bluetooth-service-default.xml). Check whether or not multiple modules providing the same HAL are installed.
+[    5.879769][  T189] servicemanager: getDeviceHalManifest: -2147483648 VINTF parse error: Cannot add manifest fragment /vendor/etc/vintf/manifest/bluetooth-service-default.xml: HAL "android.hardware.bluetooth" has a conflict: Conflicting FqInstance: IBluetoothHci/default (@1) (from /vendor/etc/vintf/manifest/android.hardware.bluetooth-service.xml) vs. IBluetoothHci/default (@1) (from /vendor/etc/vintf/manifest/bluetooth-service-default.xml). Check whether or not multiple modules providing the same HAL are installed.
+
+# --- 修复前 patch.img 内 /etc/vintf/manifest 的两份声明 ---
+# android.hardware.bluetooth-service.xml      551 B  21-Oct  （我们的片段，旧文件名）
+# bluetooth-service-default.xml               282 B   4-Aug  （底座 AOSP 参考声明）
+# 两者都写 <name>android.hardware.bluetooth</name> / <fqname>IBluetoothHci/default</fqname>

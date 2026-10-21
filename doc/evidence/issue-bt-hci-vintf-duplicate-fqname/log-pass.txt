@@ -1,0 +1,23 @@
+# 修复后（实例 gold-15/8，global 3.0.5.0，镜像 out/device/gold-15/15/os3.0.5.0.vnqmixm）
+# 来源：out/device/gold-15/15/os3.0.5.0.vnqmixm/patch.img + out/core/stage/runtime/gold-15/8/qemu.log
+
+# --- 1) patch.img 内 vintf 目录只剩一份声明（debugfs ls） ---
+$ /opt/homebrew/opt/e2fsprogs/sbin/debugfs -R "ls -l /etc/vintf/manifest" patch.img | grep -i blue
+    432  100755 (1)      0      0     885 21-Oct-2026 21:04 bluetooth-service-default.xml
+
+# --- 2) 运行期 VINTF 冲突计数为 0 ---
+$ grep -c "Conflicting FqInstance" qemu.log
+0
+
+# --- 3) servicemanager 正常解析并找到 HAL ---
+[   59.969538][  T191] servicemanager: Caller(pid=2361,uid=1002,sid=u:r:bluetooth:s0) Found android.hardware.bluetooth.IBluetoothHci/default in device VINTF manifest.
+[  355.335334][  T191] servicemanager: Caller(pid=10053,uid=1002,sid=u:r:bluetooth:s0) Found android.hardware.bluetooth.IBluetoothHci/default in device VINTF manifest.
+
+# --- 4) 片段内容（唯一一条 fqname） ---
+<manifest version="1.0" type="device">
+  <hal format="aidl">
+    <name>android.hardware.bluetooth</name>
+    <version>1</version>
+    <fqname>IBluetoothHci/default</fqname>
+  </hal>
+</manifest>

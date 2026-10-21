@@ -1,0 +1,26 @@
+# gold（Redmi Note 13 5G, android15）自研蓝牙 HCI HAL（虚拟 HAL）。
+#
+# lineage/gold 底座只带了 bluetooth.audio（A2DP 音频 HAL），没有 HCI 传输 HAL：vendor VINTF
+# 未声明 android.hardware.bluetooth.IBluetoothHci，framework Fluoride 栈起不来（拿不到 HCI
+# 通道，蓝牙永远无法开启）。本服务接管 android.hardware.bluetooth.IBluetoothHci/default，
+# 以 H4 帧读写 /dev/hvc5（virtio-console，对端为宿主 stage front channels/bt-hci.sock +
+# netsimd 仿真），扫描/连接逻辑全在 framework 侧，本 HAL 只做忠实传输。
+#
+# 本文件**覆盖**底座自带的同名 bluetooth-service-default.rc：底座那份也定义
+# `service vendor.bluetooth-default`（指向 AOSP 参考二进制 bluetooth-service-default，且无
+# seclabel/interface）。两份同名 service 会触发 init "ignored duplicate definition"，谁胜出
+# 取决于 rc 解析顺序（当前靠字母序偶然胜出），属隐患。同名覆盖后只剩本定义。
+#
+# 设备节点默认 /dev/hvc5，可被属性 vendor.ser.bt-uart 覆盖（换机型改线号无需重编），
+# 联调亦可 env CDH_BT_HCI_DEV 指定；无外置 cfg。二进制名与引擎产物同名
+# （android.hardware.bluetooth-service）。复用底包既有标准域 hal_bluetooth_default。
+service vendor.bluetooth-default /vendor/bin/hw/android.hardware.bluetooth-service
+    class hal
+    user bluetooth
+    group bluetooth
+    seclabel u:r:hal_bluetooth_default:s0
+    interface aidl android.hardware.bluetooth.IBluetoothHci/default
+    disabled
+
+on post-fs-data
+    start vendor.bluetooth-default

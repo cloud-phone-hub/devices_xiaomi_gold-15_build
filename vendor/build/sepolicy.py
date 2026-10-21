@@ -186,6 +186,24 @@ WIFI_DATA_FC_LINES = [
     "/dev/hvc10  u:object_r:cdh_wifi_data:s0",
 ]
 
+# ---- 蓝牙 HCI AIDL HAL（自研虚拟 HAL，IBluetoothHci/default）注册附加 ----
+BLUETOOTH_MARKER = ";; cdh note13-5G-15: bluetooth-hal"
+# gold 底座 vendor 侧无 HCI HAL（VINTF 只有 bluetooth.audio，vendor_service_contexts 无
+# IBluetoothHci 表项），framework Fluoride 拿不到 HCI 传输、蓝牙无法开启。自研服务以底包
+# 既有 hal_bluetooth_default 域注册 android.hardware.bluetooth.IBluetoothHci/default，
+# service_contexts 用接口名（无实例）匹配 /default（同 IWifi/ICameraProvider 写法）。
+BLUETOOTH_VSC_LINES = [
+    "android.hardware.bluetooth.IBluetoothHci      u:object_r:hal_bluetooth_service:s0",
+]
+# 宿主蓝牙 HCI 通道 /dev/hvc5 的独立设备标签：基座正则 /dev/hvc[0-9]+ 统一标
+# console_device，追加字面行以免把 root console(0/1)、radio(4)、wifi(9/10) 等其它通道
+# 一并放开给蓝牙 HAL（对齐 wifi 的 cdh_wifi_channel 做法）。
+BT_CHANNEL_TYPE = "cdh_bt_channel"
+BT_FC_LINES = [
+    "# cdh note13-5G-15: bluetooth host channel /dev/hvc5",
+    "/dev/hvc5  u:object_r:cdh_bt_channel:s0",
+]
+
 # ---- media (codec2) AIDL HAL（假登记 store）注册附加 ----
 # 基座 lineage virtio vendor 无 media.c2 HAL（VINTF 无声明、vendor_service_contexts
 # 无表项），但 plat 已含 hal_codec2 类型属性（挂 mediacodec 域）、hal_codec2_service_202404
@@ -1093,6 +1111,38 @@ def wifi_hal_cil(vers: str) -> str:
     )
 
 
+def bluetooth_hal_cil(vers: str) -> str:
+    """蓝牙 HCI AIDL HAL 段：hal_bluetooth_default 注册 IBluetoothHci/default + 宿主通道。
+
+    底包已具备完整 hal_bluetooth_default 域（hal_bluetooth_default_exec + init 域转换 +
+    hal_bluetooth_server 属性成员），plat 标准宏覆盖 hal_bluetooth_server ->
+    hal_bluetooth_service 的 service_manager add/find 与 hal_bluetooth_client 的 binder，
+    本段照 wifi 式仅补三件事：
+      * service_contexts 的 hal_bluetooth_service 映射（见 BLUETOOTH_VSC_LINES）——gold
+        vendor 侧无此表项，否则 AServiceManager_addService 无上下文而失败；
+      * 显式 add/find（hal_bluetooth_default -> hal_bluetooth_service_{vers}）与客户端
+        find（bluetooth_{vers}，即运行 Fluoride 栈的蓝牙 app 域）作兜底——allow 叠加无害，
+        避免依赖 plat 属性成员在本盘未必齐全（对齐 camera/vibrator 做法）；
+      * 宿主 HCI 通道 /dev/hvc5 的独立设备标签与 HAL 读写授权（见 BT_CHANNEL_TYPE；标签行
+        由 bluetooth_hal_patch_commands 追加到 vendor_file_contexts）。
+
+    蓝牙 HCI 不使用 FMQ，无 ashmem 授权；不读自定义属性（走内置默认 /dev/hvc5），
+    故无 property 授权。
+    """
+    return (
+        f"{BLUETOOTH_MARKER}\n"
+        + _allow("hal_bluetooth_default", f"hal_bluetooth_service_{vers}",
+                 "service_manager", "add find".split())
+        + _allow(f"bluetooth_{vers}", f"hal_bluetooth_service_{vers}",
+                 "service_manager", ["find"])
+        + f"(type {BT_CHANNEL_TYPE})\n"
+        + f"(roletype object_r {BT_CHANNEL_TYPE})\n"
+        + f"(typeattributeset dev_type ({BT_CHANNEL_TYPE}))\n"
+        + _allow("hal_bluetooth_default", BT_CHANNEL_TYPE, "chr_file",
+                 "getattr ioctl open read write".split())
+    )
+
+
 def media_hal_cil(vers: str) -> str:
     """media (codec2) HAL 段：mediacodec 域注册 IComponentStore（假登记 store）。
 
@@ -1253,6 +1303,8 @@ def hal_cil_chain(merged: str, vers: str, names=None) -> str:
         cil += gnss_hal_cil(vers)
     if WIFI_MARKER not in merged:
         cil += wifi_hal_cil(vers)
+    if BLUETOOTH_MARKER not in merged:
+        cil += bluetooth_hal_cil(vers)
     if MEDIA_MARKER not in merged:
         cil += media_hal_cil(vers)
     if VENDOR_PROP_READ_MARKER not in merged:
@@ -1271,7 +1323,8 @@ def hal_vsc_missing(vsc: bytes) -> list:
               list(SENSORS_VSC_LINES) + list(CAMERA_VSC_LINES) +
               list(THERMAL_VSC_LINES) + list(VIBRATOR_VSC_LINES) +
               list(LIGHTS_VSC_LINES) + list(GNSS_VSC_LINES) +
-              list(WIFI_VSC_LINES) + list(MEDIA_VSC_LINES))
+              list(WIFI_VSC_LINES) + list(BLUETOOTH_VSC_LINES) +
+              list(MEDIA_VSC_LINES))
     return [line for line in wanted if line.encode("utf-8") not in vsc]
 
 
@@ -1404,8 +1457,8 @@ def vfc_missing_hal_lines(vfc: bytes) -> list:
     """vendor_file_contexts 里尚缺的 CDH HAL 设备字面行（keymint hvc3 / wifi hvc9+hvc10）。
 
     与 vendor_sepolicy.cil 同机制：各 patch 读到的都是工作镜像里的「原始」文件，debugfs
-    命令按序执行、只有最后一次 write 生效 —— wifi 是最后一个 vendor_file_contexts
-    写入者，故必须把 keymint 段一并补齐，否则 hvc3 标签会丢。
+    命令按序执行、只有最后一次 write 生效 —— bluetooth 是最后一个 vendor_file_contexts
+    写入者（在 wifi 之后），故必须把 keymint(hvc3)/wifi(hvc9+hvc10) 段一并补齐，否则标签会丢。
     """
     missing = []
     if b"u:object_r:keymaster_device:s0" not in vfc:
@@ -1414,6 +1467,8 @@ def vfc_missing_hal_lines(vfc: bytes) -> list:
         missing += WIFI_FC_LINES
     if f"u:object_r:{WIFI_DATA_TYPE}:s0".encode() not in vfc:
         missing += WIFI_DATA_FC_LINES
+    if f"u:object_r:{BT_CHANNEL_TYPE}:s0".encode() not in vfc:
+        missing += BT_FC_LINES
     return missing
 
 
@@ -1442,6 +1497,39 @@ def wifi_hal_patch_commands(work_img, tmp_dir=None) -> list:
         f.write(vfc + ("\n" + "\n".join(missing) + "\n").encode("utf-8"))
     print(f"[ok] vendor_file_contexts 追加 {len(missing)} 条 HAL 设备标签"
           f"（keymint hvc3 + wifi hvc9/hvc10）")
+    cmds += [
+        f"rm {VFC}",
+        f"write {tmp} {VFC}",
+        f"ea_set {VFC} security.selinux {VFC_LABEL}",
+    ]
+    return cmds
+
+
+def bluetooth_hal_patch_commands(work_img, tmp_dir=None) -> list:
+    """蓝牙 HCI AIDL HAL（自研虚拟 HAL）注册所需的策略补齐。
+
+    CIL 段与 vendor_service_contexts 映射见 hal_policy_patch_commands（bluetooth 段含
+    IBluetoothHci/default 表项、hal_bluetooth_default 的 service_manager add/find、宿主
+    通道 /dev/hvc5 授权）；本函数另外补 vendor_file_contexts 的 /dev/hvc5 字面标签——
+    bluetooth 是 vendor_file_contexts 的**最后一个写入者**（在 wifi 之后调用），须一并
+    补齐 keymint 的 hvc3 行与 wifi 的 hvc9/hvc10 行（见 vfc_missing_hal_lines，聚合全部）。
+    """
+    cmds = hal_policy_patch_commands(work_img, tmp_dir)
+    tmp_dir = tmp_dir or os.path.join(TMP_DIR, "vendor")
+    os.makedirs(tmp_dir, exist_ok=True)
+    vfc = cat(work_img, VFC)
+    if vfc is None:
+        print(f"[err] 读不到 {VFC}")
+        sys.exit(1)
+    missing = vfc_missing_hal_lines(vfc)
+    if not missing:
+        print("[ok] vendor_file_contexts 已含 keymint/wifi/bluetooth 设备标签，跳过")
+        return cmds
+    tmp = os.path.join(tmp_dir, "vendor_file_contexts_bt_chain")
+    with open(tmp, "wb") as f:
+        f.write(vfc + ("\n" + "\n".join(missing) + "\n").encode("utf-8"))
+    print(f"[ok] vendor_file_contexts 追加 {len(missing)} 条 HAL 设备标签"
+          f"（keymint hvc3 + wifi hvc9/hvc10 + bluetooth hvc5）")
     cmds += [
         f"rm {VFC}",
         f"write {tmp} {VFC}",

@@ -1,0 +1,63 @@
+# 修复后（实例 gold-15/8，global 3.0.5.0，镜像 out/device/gold-15/15/os3.0.5.0.vnqmixm）
+# 来源：patch.img + out/core/stage/runtime/gold-15/8/{qemu.log,runtime/bluetooth/netsimd.log}
+
+# --- 1) patch.img 内 /etc/init 只有一份蓝牙 rc（已覆盖底座同名文件） ---
+$ /opt/homebrew/opt/e2fsprogs/sbin/debugfs -R "ls -l /etc/init" patch.img | grep -i blue
+    324  100755 (1)      0      0    1625 21-Oct-2026 21:04 bluetooth-service-default.rc
+
+# --- 2) 蓝牙 service 不再有 duplicate（仅剩底座既有 setup_wifi 重名，与本模块无关） ---
+$ grep -c "ignored duplicate definition of service 'vendor.bluetooth-default'" qemu.log
+0
+$ grep "ignored duplicate definition" qemu.log
+[    0.509526][    T1] init: /vendor/etc/init/setup_wifi.rc: 1: ignored duplicate definition of service 'setup_wifi'
+
+# --- 3) 唯一蓝牙 rc 被解析 + 服务启动 ---
+[    0.506509][    T1] init: Parsing file /vendor/etc/init/bluetooth-service-default.rc...
+[   24.319207][    T1] init: starting service 'vendor.bluetooth-default'...
+[   24.322397][    T1] init: ... started service 'vendor.bluetooth-default' has pid 482
+
+# --- 4) guest 侧：HAL 进程确实持有 /dev/hvc5（root shell 取证） ---
+:/ # cat /proc/482/cmdline; echo
+/vendor/bin/hw/android.hardware.bluetooth-service
+:/ # ls -l /proc/482/fd | grep hvc
+lrwx------ 1 bluetooth bluetooth 64 2026-08-11 20:40 5 -> /dev/hvc5
+:/ # ls -l /dev/hvc5
+crw-rw-rw- 1 system system 229,   5 2026-08-11 20:40 /dev/hvc5
+
+# --- 5) 真实开启蓝牙成功 ---
+:/ # cmd bluetooth_manager enable
+BluetoothShellCommand: Exec enable
+enable: Success
+:/ # dumpsys bluetooth_manager | head -10
+Bluetooth Status
+  enabled: true
+  state: ON
+  address: 00:00:00:DE:17:00
+  isSupportBluetoothHalfOn: false
+  BluetoothHalfOnState: false
+  name: Redmi Note 13 5G
+  time since enabled: 00:00:26.198
+Enable log:
+  08-11 20:40:02.521  Enabled  due to APPLICATION_REQUEST by android
+
+:/ # ps -A | grep -i bluetooth
+bluetooth      482     1   10792652   4544 binder_thread_read  0 S android.hardware.bluetooth-service
+bluetooth    10053   501   18733676 173616 do_epoll_wait       0 S com.android.bluetooth
+bluetooth    10127   501   17349696 178820 do_epoll_wait       0 S com.xiaomi.bluetooth
+
+# --- 6) 宿主 netsimd：完整的 HCI 初始化序列（下行帧） ---
+root-canal D 10-21 21:07:55.597 dual_mode_controller.cc:291           1  << Reset
+root-canal D 10-21 21:07:56.615 dual_mode_controller.cc:982           1  << Set Event Mask
+root-canal D 10-21 21:07:56.616 dual_mode_controller.cc:954           1  << Write LE Host Support
+root-canal D 10-21 21:07:56.618 dual_mode_controller.cc:1343          1  << Read Local Name
+root-canal D 10-21 21:07:56.618 dual_mode_controller.cc:386           1  << Read Local Version Information
+root-canal D 10-21 21:07:56.624 dual_mode_controller.cc:304           1  << Read Buffer Size
+root-canal D 10-21 21:07:56.635 dual_mode_controller.cc:418           1  << Read BD_ADDR
+...
+
+# --- 7) enable 之后 framework 发起 LE 扫描，帧继续到达 netsimd ---
+root-canal D 10-21 21:12:54.420 dual_mode_controller.cc:2458          1  << LE Set Extended Scan Enable
+root-canal D 10-21 21:12:54.420 dual_mode_controller.cc:2459          1     enable=false
+root-canal D 10-21 21:12:54.421 dual_mode_controller.cc:2445          1  << LE Set Extended Scan Parameters
+root-canal D 10-21 21:13:13.811 dual_mode_controller.cc:2458          1  << LE Set Extended Scan Enable
+root-canal D 10-21 21:13:13.811 dual_mode_controller.cc:2459          1     enable=true
