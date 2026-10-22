@@ -1,0 +1,24 @@
+# 修复前（实例 gold_cn_OS3.0.10.0.VNQCNXM/1，CN 3.0.10.0；patch.img 为 20:21 旧产物）
+# 来源：out/core/daemon/runtime/gold_cn_OS3.0.10.0.VNQCNXM/1/qemu.log（2026-10-21 22:25 启动段落）
+[    5.985774][  T192] servicemanager: getDeviceHalManifest: -2147483648 VINTF parse error: Cannot add manifest fragment /vendor/etc/vintf/manifest/bluetooth-service-default.xml: HAL "android.hardware.bluetooth" has a conflict: Conflicting FqInstance: IBluetoothHci/default (@1) (from /vendor/etc/vintf/manifest/android.hardware.bluetooth-service.xml) vs. IBluetoothHci/default (@1) (from /vendor/etc/vintf/manifest/bluetooth-service-default.xml). Check whether or not multiple modules providing the same HAL are installed.
+[    5.986281][  T192] servicemanager: NULL VINTF MANIFEST!: device
+[    6.091681][    T1] init: starting service 'keystore2'...
+[    6.093640][    T1] init: ... started service 'keystore2' has pid 306
+[    6.136219][  T192] servicemanager: Caller(pid=205,uid=0,sid=u:r:vold:s0) Since 'android.system.keystore2.IKeystoreService/default' could not be found trying to start it as a lazy AIDL service. (if it's not configured to be a lazy service, it may be stuck starting or still starting).
+[    7.138134][  T205] ServiceManagerCppClient: Waited one second for android.system.keystore2.IKeystoreService/default (is service started? Number of threads started in the threadpool: 17. Are binder threads started and available?)
+[    8.140891][  T205] ServiceManagerCppClient: Waited one second for android.system.keystore2.IKeystoreService/default (is service started? Number of threads started in the threadpool: 17. Are binder threads started and available?)
+[    9.144036][  T205] ServiceManagerCppClient: Waited one second for android.system.keystore2.IKeystoreService/default (is service started? Number of threads started in the threadpool: 17. Are binder threads started and available?)
+# …… vold 每秒重试直至 SIGTERM 停止（22:25 段落共计数百次，keystore2 从未注册）
+
+# --- 修复前 patch.img（20:21 旧产物）内 /etc/vintf/manifest 的两份声明 ---
+# android.hardware.bluetooth-service.xml      551 B  21-Oct 20:20  （自研片段，旧文件名）
+# bluetooth-service-default.xml               282 B   4-Aug         （底座 AOSP 参考声明）
+# 两者都写 <name>android.hardware.bluetooth</name> / <fqname>IBluetoothHci/default</fqname>
+
+# --- keymint 侧同期证据（正常，说明"keymint 启动不了"是误判） ---
+[    5.960434][  T119] CDH-KM-V5-HVC3READY\n
+[    5.968846][  T227] android.hardware.security.keymint-service.remote: adding keymint service instance: android.hardware.security.keymint.IKeyMintDevice/default
+[    5.970269][  T227] android.hardware.security.keymint-service.remote: adding keymint service instance: android.hardware.security.secureclock.ISecureClock/default
+[    5.971804][  T227] android.hardware.security.keymint-service.remote: adding keymint service instance: android.hardware.security.keymint.IRemotelyProvisionedComponent/default
+# secure-env/keymint-wire.log 每次启动 222 B（boot info: green/locked/Redmi/gold/867400022047199/Xiaomi/2312DRAABC）；
+# secure-env.log 无错误（"Could not receive message" 仅出现在实例被停止、socket 关闭时）。

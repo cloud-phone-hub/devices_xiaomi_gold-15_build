@@ -32,6 +32,7 @@
 | 22 | [issue-adb-shell-netns](issue-adb-shell-netns/solution.md) | 云机 adb shell / app 看不到 ccmni2（ADB 被关在 adb_net 私有 netns） | 已完成 |
 | 23 | [issue-serial-logcat-capture](issue-serial-logcat-capture/solution.md) | adb 不可达 → logcat 串口取证通道（guest 侧 Java 崩溃证据） | 已完成 |
 | 24 | [issue-video-fast-playback](issue-video-fast-playback/solution.md) | 在线视频倍速播放（5~8 倍速）+ 绿块花屏 | 已完成 |
+| 25 | [issue-cn-patch-stale-keystore2-stuck](issue-cn-patch-stale-keystore2-stuck/solution.md) | CN 3.0.10.0 镜像 patch.img 未重新发布 → VINTF manifest 整份解析失败 → keystore2 卡死、开机停在 /data（keymint 侧正常，易误判） | **已完成**（2026-10-21，实例 gold_cn_OS3.0.10.0.VNQCNXM/1） |
 
 ## 备注
 
@@ -40,5 +41,11 @@
   （VINTF 片段、init rc 都一样）。
 - #3 为构建层集成记录；其运行期结论（HCI frames 往返、`bluetooth_manager` state ON）
   见 #1/#2 的 `log-pass.txt`。
+- 2026-10-21 新增 #25：修复已在 #1 完成并验证过 global 3.0.5.0（实例 8），但
+  CN 3.0.10.0 镜像目录的 patch.img 仍是旧构建（发布遗漏），导致同一冲突在 CN 复现，
+  并首次暴露出「keystore2 卡死 → vold 等 IKeystoreService → 开机停在 /data」的后果链。
+  规则：**仅跑 `--only patch` 不会更新 `out/device/<...>/patch.img`，必须重跑 pack
+  或手动发布并核对 sha256**。
+
 - 本目录尚未覆盖的问题（如 MTK 私有 HCI 命令 `0xfd5e/0xfd5f` 未被 netsimd 实现）
   记录在 #2 的「遗留」中。

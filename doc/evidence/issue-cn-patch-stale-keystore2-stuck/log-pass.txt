@@ -1,0 +1,59 @@
+# 修复验证（同一实例，2026-10-21 22:46 启动段落；patch.img 的 bluetooth-service-default.xml 已替换为空 manifest）
+# 来源：out/core/daemon/runtime/gold_cn_OS3.0.10.0.VNQCNXM/1/qemu.log（22:46:56 起的新段落）
+
+# --- 1) VINTF 冲突与 vold 重试计数均为 0 ---
+$ sed -n '5711,$p' qemu.log > /tmp/new-boot.log
+$ grep -c "VINTF parse error" /tmp/new-boot.log
+0
+$ grep -c "NULL VINTF" /tmp/new-boot.log
+0
+$ grep -c "Waited one second for android.system.keystore2" /tmp/new-boot.log
+0
+
+# --- 2) keystore2 正常注册 Keystore 2.0 服务 ---
+01-01 08:00:06.302   303   303 I keystore2: system/security/keystore2/src/keystore2_main.rs:155 - Successfully registered Keystore 2.0 service.
+
+# --- 3) keymint 链路正常（hvc3 READY + 四实例注册） ---
+[    6.124999][  T125] CDH-KM-V5-HVC3READY\n
+[    6.135601][  T224] android.hardware.security.keymint-service.remote: adding keymint service instance: android.hardware.security.keymint.IKeyMintDevice/default
+[    6.137647][  T224] android.hardware.security.keymint-service.remote: adding keymint service instance: android.hardware.security.secureclock.ISecureClock/default
+[    6.138475][  T224] android.hardware.security.keymint-service.remote: adding keymint service instance: android.hardware.security.sharedsecret.ISharedSecret/default
+[    6.139451][  T224] android.hardware.security.keymint-service.remote: adding keymint service instance: android.hardware.security.keymint.IRemotelyProvisionedComponent/default
+
+# --- 4) 系统完整开机（adb） ---
+$ adb -s 4lmbvom7gifm5lbu shell getprop sys.boot_completed
+1
+$ adb -s 4lmbvom7gifm5lbu shell getprop ro.product.device
+gold
+$ adb -s 4lmbvom7gifm5lbu shell getprop ro.build.version.release
+15
+
+# --- 5) HAL 服务可达（adb service check） ---
+$ adb shell "service check android.hardware.security.keymint.IKeyMintDevice/default"
+Service android.hardware.security.keymint.IKeyMintDevice/default: found
+$ adb shell "service check android.hardware.bluetooth.IBluetoothHci/default"
+Service android.hardware.bluetooth.IBluetoothHci/default: found
+
+# --- 6) keymint 通道被实际使用（wire.log 从 222 B 增长到 ~14 KB） ---
+$ ls -la secure-env/keymint-wire.log
+-rw-r--r--  1 cuimingqiang  staff  13983 10 21 22:48 secure-env/keymint-wire.log
+
+# --- 7) 正式产物复验（CN build-id 重建并存发布，2026-10-21 22:58 启动段落） ---
+# patch.img: out/dist/rom/patch.img -> out/device/gold-15/15/os3.0.10.0.vnqcnxm/patch.img
+# sha256 a0ed50f4cb6a78a4f9e195c55446143132eba7e31ba67d0ccb28a6c109cec364
+$ grep -c "VINTF parse error" /tmp/final-boot.log
+0
+$ grep -c "NULL VINTF" /tmp/final-boot.log
+0
+$ grep -c "Waited one second for android.system.keystore2" /tmp/final-boot.log
+0
+01-01 08:00:06.038   304   304 I keystore2: system/security/keystore2/src/keystore2_main.rs:155 - Successfully registered Keystore 2.0 service.
+[    5.885637][  T125] CDH-KM-V5-HVC3READY\n
+$ ls -la secure-env/keymint-wire.log
+-rw-r--r--  1 cuimingqiang  staff  19764 10 21 22:59 secure-env/keymint-wire.log
+$ adb -s 4lmbvom7gifm5lbu shell getprop sys.boot_completed
+1
+$ adb shell "service check android.hardware.security.keymint.IKeyMintDevice/default"
+Service android.hardware.security.keymint.IKeyMintDevice/default: found
+$ adb shell "service check android.hardware.bluetooth.IBluetoothHci/default"
+Service android.hardware.bluetooth.IBluetoothHci/default: found
